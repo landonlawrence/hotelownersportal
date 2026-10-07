@@ -147,8 +147,8 @@ create table public.ingestion_alerts (
   foreign key (source_id, company_id) references public.ingestion_sources (id, company_id) on delete cascade,
   foreign key (property_id, company_id) references public.properties (id, company_id) on delete cascade
 );
-create unique index ingestion_alerts_unique on public.ingestion_alerts
-  (source_id, coalesce(property_id, '00000000-0000-0000-0000-000000000000'::uuid), alert_type, expected_for);
+alter table public.ingestion_alerts
+  add constraint ingestion_alerts_unique unique nulls not distinct (source_id, property_id, alert_type, expected_for);
 
 create table public.integration_connections (
   id uuid primary key default gen_random_uuid(),

@@ -15,7 +15,14 @@
 create extension if not exists btree_gist with schema extensions;
 create extension if not exists pgcrypto with schema extensions;
 
+-- Nothing created by migrations is reachable by client roles unless granted explicitly.
+alter default privileges in schema public revoke all on tables from anon, authenticated;
+alter default privileges in schema public revoke all on sequences from anon, authenticated;
+alter default privileges in schema public revoke all on functions from public, anon, authenticated;
+
 create schema if not exists app;
+alter default privileges in schema app revoke all on functions from public, anon;
+alter default privileges in schema app grant execute on functions to authenticated, service_role;
 revoke all on schema app from public;
 grant usage on schema app to anon, authenticated, service_role;
 

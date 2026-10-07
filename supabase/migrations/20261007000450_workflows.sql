@@ -176,13 +176,26 @@ grant execute on function public.approve_budget_version(uuid, text) to authentic
 create or replace function public.budget_kpi_monthly(p_company_id uuid, p_from date, p_to date)
 returns table (property_id uuid, period_month date, kpi_role text, amount numeric)
 language sql stable security invoker set search_path = '' as $$
-  select l.property_id, l.period_month, a.kpi_role, sum(l.amount)
+  select l.property_id, l.period_month,
+         case when a.kpi_role in ('rooms_available', 'rooms_sold', 'room_revenue') then a.kpi_role else 'total_revenue' end,
+         sum(l.amount)
   from public.budget_lines l
   join public.budget_versions v on v.id = l.budget_version_id and v.status = 'approved'
-  join public.financial_accounts a on a.id = l.account_id and a.kpi_role is not null
+  join public.financial_accounts a on a.id = l.account_id
   where l.company_id = p_company_id
     and l.period_month between date_trunc('month', p_from)::date and p_to
-  group by 1, 2, 3;
+    and (a.kpi_role in ('rooms_available', 'rooms_sold', 'room_revenue') or a.nature = 'revenue')
+  group by 1, 2, 3
+  union all
+  -- Rooms revenue also counts toward total revenue.
+  select l.property_id, l.period_month, 'total_revenue', sum(l.amount)
+  from public.budget_lines l
+  join public.budget_versions v on v.id = l.budget_version_id and v.status = 'approved'
+  join public.financial_accounts a on a.id = l.account_id
+  where l.company_id = p_company_id
+    and l.period_month between date_trunc('month', p_from)::date and p_to
+    and a.kpi_role = 'room_revenue'
+  group by 1, 2;
 $$;
 grant execute on function public.budget_kpi_monthly(uuid, date, date) to authenticated;
 
@@ -543,6 +556,7 @@ insert into public.allowed_document_types values
   ('image/png', array['png'], 15728640),
   ('image/jpeg', array['jpg', 'jpeg'], 15728640);
 alter table public.allowed_document_types enable row level security;
+revoke all on public.allowed_document_types from anon, authenticated;
 grant select on public.allowed_document_types to authenticated;
 create policy allowed_types_read on public.allowed_document_types for select to authenticated using (true);
 

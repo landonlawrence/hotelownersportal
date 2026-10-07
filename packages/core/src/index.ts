@@ -8,3 +8,4 @@ export * from './branding.js';
 export * from './permissions.js';
 export * from './integrations.js';
 export * from './ingestion/index.js';
+export * from './performance.js';
