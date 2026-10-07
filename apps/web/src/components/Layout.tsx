@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ROLE_LABELS, type Permission, type Role } from '@hop/core';
 import { supabase } from '../lib/supabase';
 import { usePortal, useCompany } from '../state/portal';
+import { Loading } from './ui';
 
 interface NavItem {
   to: string;
@@ -108,7 +109,9 @@ export function Layout() {
           </button>
         </header>
         <main className="content" id="main">
-          <Outlet />
+          <Suspense fallback={<Loading />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

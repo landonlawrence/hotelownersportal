@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation, Link } from 'react-router-dom';
 import { supabase } from './lib/supabase';
 import { usePortal } from './state/portal';
@@ -5,19 +6,25 @@ import { Layout } from './components/Layout';
 import { Card, Empty, Loading, PageHeader } from './components/ui';
 import { LoginPage } from './pages/Login';
 import { AcceptInvitePage } from './pages/AcceptInvite';
-import { SecurityPage } from './pages/Security';
-import { OverviewPage } from './pages/Overview';
-import { PropertiesPage, PropertyDetailPage } from './pages/Properties';
-import { PerformancePage } from './pages/Performance';
-import { FinancialsPage } from './pages/Financials';
-import { FinancialReportPage } from './pages/FinancialReport';
-import { BudgetVersionPage } from './pages/BudgetVersion';
-import { CapexPage, CapexProjectPage } from './pages/Capex';
-import { DocumentsPage } from './pages/Documents';
-import { ReportPackagePage, ReportsPage } from './pages/Reports';
-import { NotificationsPage } from './pages/Notifications';
-import { ImportDetailPage, ImportsPage } from './pages/Imports';
-import { AdminPage, Platform } from './pages/Admin';
+
+const OverviewPage = lazy(() => import('./pages/Overview').then((m) => ({ default: m.OverviewPage })));
+const PropertiesPage = lazy(() => import('./pages/Properties').then((m) => ({ default: m.PropertiesPage })));
+const PropertyDetailPage = lazy(() => import('./pages/Properties').then((m) => ({ default: m.PropertyDetailPage })));
+const PerformancePage = lazy(() => import('./pages/Performance').then((m) => ({ default: m.PerformancePage })));
+const FinancialsPage = lazy(() => import('./pages/Financials').then((m) => ({ default: m.FinancialsPage })));
+const FinancialReportPage = lazy(() => import('./pages/FinancialReport').then((m) => ({ default: m.FinancialReportPage })));
+const BudgetVersionPage = lazy(() => import('./pages/BudgetVersion').then((m) => ({ default: m.BudgetVersionPage })));
+const CapexPage = lazy(() => import('./pages/Capex').then((m) => ({ default: m.CapexPage })));
+const CapexProjectPage = lazy(() => import('./pages/Capex').then((m) => ({ default: m.CapexProjectPage })));
+const DocumentsPage = lazy(() => import('./pages/Documents').then((m) => ({ default: m.DocumentsPage })));
+const ReportsPage = lazy(() => import('./pages/Reports').then((m) => ({ default: m.ReportsPage })));
+const ReportPackagePage = lazy(() => import('./pages/Reports').then((m) => ({ default: m.ReportPackagePage })));
+const NotificationsPage = lazy(() => import('./pages/Notifications').then((m) => ({ default: m.NotificationsPage })));
+const ImportsPage = lazy(() => import('./pages/Imports').then((m) => ({ default: m.ImportsPage })));
+const ImportDetailPage = lazy(() => import('./pages/Imports').then((m) => ({ default: m.ImportDetailPage })));
+const AdminPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.AdminPage })));
+const Platform = lazy(() => import('./pages/Admin').then((m) => ({ default: m.Platform })));
+const SecurityPage = lazy(() => import('./pages/Security').then((m) => ({ default: m.SecurityPage })));
 
 function RequireAuth() {
   const { session, sessionLoading, ctx, ctxLoading, company } = usePortal();
@@ -31,7 +38,9 @@ function RequireAuth() {
         {ctx.is_platform_admin ? (
           <>
             <PageHeader title="Platform administration" subtitle="You have no company memberships. Open an audited support session to view a company." actions={<button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>} />
-            <Platform />
+            <Suspense fallback={<Loading />}>
+              <Platform />
+            </Suspense>
           </>
         ) : (
           <Card>
@@ -44,7 +53,11 @@ function RequireAuth() {
       </div>
     );
   }
-  return <Outlet />;
+  return (
+    <Suspense fallback={<Loading />}>
+      <Outlet />
+    </Suspense>
+  );
 }
 
 function NotFound() {

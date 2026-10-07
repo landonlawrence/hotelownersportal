@@ -28,7 +28,7 @@ All six milestones are implemented and verified **locally**. No cloud deployment
 | CDK synth | `npx cdk synth -c env=staging` / `production` | succeeds |
 | Integration (local Supabase, fresh reset) | `npm run test:integration` | 70 passed (7 files) |
 | End-to-end (Playwright) | `npm run test:e2e` | 8 passed |
-| Web production build | `npm run build -w apps/web` | succeeds (single 918 kB chunk — see next tasks) |
+| Web production build | `npm run build -w apps/web` | succeeds; route-level code splitting (initial chunk 376 kB) |
 
 Required verification coverage: cross-company/cross-property denial ✔, direct API and document access ✔, revoked permissions (DB + background job) ✔, draft visibility ✔, portfolio KPI weighting ✔, missing data/zero denominators ✔, budget/variance ✔, duplicate and revised imports ✔, invalid property mappings ✔, publication/revision history ✔, CapEx permissions/thresholds ✔, branding and company switching ✔, security acceptance (UI, API, export, document URL) ✔.
 
@@ -46,9 +46,9 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 
 1. **Cloud credentials & authorization:** AWS account + GitHub OIDC deploy role; separate Supabase projects for staging and production; GitHub environment variables/secrets listed in `docs/DEPLOYMENT.md`. Staging auto-deploy is disabled until `STAGING_ENABLED=true`.
 2. **Production release authorization** (manual dispatch + environment reviewers).
-3. **Domains:** inbound email domain (MX → SES), verified SES sending identity, ACM certificate and DNS for tenant custom domains.
-4. **Real PMS / accounting sample reports** before implementing vendor-specific parsers; **Travera** API documentation/access before implementing its adapter.
-5. **Policy decisions to confirm with the business:** CapEx thresholds per company; whether owners should see confidential (loan/bank) documents by default (currently no); MFA requirement for owners approving CapEx (currently required when the company enforces MFA).
+2. **Domains:** inbound email domain (MX → SES), verified SES sending identity, ACM certificate and DNS for tenant custom domains.
+3. **Real PMS / accounting sample reports** before implementing vendor-specific parsers; **Travera** API documentation/access before implementing its adapter.
+4. **Policy decisions to confirm with the business:** CapEx thresholds per company; whether owners should see confidential (loan/bank) documents by default (currently no); MFA requirement for owners approving CapEx (currently required when the company enforces MFA).
 
 ## Assumptions in effect
 
@@ -57,13 +57,12 @@ See `docs/DECISIONS.md` (single currency per company, calendar fiscal year defau
 ## Next tasks (suggested order)
 
 1. Provision staging (Supabase project + AWS account), run the Deploy workflow, execute `docs/PILOT_ACCEPTANCE.md`.
-2. Route-level code splitting for the web bundle (recharts and admin pages lazily loaded).
 3. Server-rendered branded PDF exports for statements and owner packages (currently browser print view + CSV).
 4. Notification preferences UI (table and API already exist).
 5. Ingestion source/route management UI (currently seeded/SQL; read-only list in UI).
-6. Property and room-inventory management UI for company admins (policies exist; UI is read-only).
-7. WAF for CloudFront/API in production; log drains from Supabase to CloudWatch.
-8. PMS parser adapters once real sample files are supplied (fixtures + tests first).
+5. Property and room-inventory management UI for company admins (policies exist; UI is read-only).
+6. WAF for CloudFront/API in production; log drains from Supabase to CloudWatch.
+7. PMS parser adapters once real sample files are supplied (fixtures + tests first).
 
 ## How to resume
 
