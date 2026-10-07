@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --env-file=.env.local src/local/server.ts",
-    "start": "tsx --env-file=.env.local src/local/server.ts",
-    "seed:files": "tsx --env-file=.env.local src/local/seedFiles.ts",
+    "dev": "node build-local.mjs && node --env-file=.env.local --enable-source-maps dist/local/server.mjs",
+    "start": "node build-local.mjs && node --env-file=.env.local --enable-source-maps dist/local/server.mjs",
+    "seed:files": "node build-local.mjs && node --env-file=.env.local dist/local/seedFiles.mjs",
     "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
