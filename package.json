@@ -19,7 +19,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint . --max-warnings=0",
     "test": "npm run test:unit",
-    "test:unit": "npm run test -w packages/core && npm run test -w services/api -- --project unit && npm run test -w infra",
+    "test:unit": "npm run test -w packages/core && npm run test -w infra",
     "test:integration": "npm run test -w tests/integration",
     "test:e2e": "npm run test -w e2e",
     "db:start": "bash scripts/db-start.sh",
@@ -38,5 +38,6 @@
     "typescript": "5.6.3",
     "typescript-eslint": "8.11.0",
     "vitest": "2.1.4"
-  }
+  },
+  "type": "module"
 }

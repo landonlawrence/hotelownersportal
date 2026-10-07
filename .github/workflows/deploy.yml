@@ -1,0 +1,102 @@
+name: Deploy
+
+# Staging deploys automatically after CI on main *only when the staging
+# environment is configured* (vars.STAGING_ENABLED == 'true').
+# Production deploys only by manual dispatch and requires approval through the
+# GitHub "production" environment protection rules.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+      ref:
+        description: Git ref (tag recommended for production)
+        required: true
+        default: main
+
+permissions:
+  contents: read
+  id-token: write # OIDC to AWS; no long-lived AWS keys in GitHub
+
+jobs:
+  deploy:
+    if: >
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success' && vars.STAGING_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
+    concurrency: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
+    env:
+      TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      - name: Verify environment configuration
+        run: |
+          for v in AWS_DEPLOY_ROLE_ARN AWS_REGION SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_ANON_KEY CDK_CONTEXT_JSON; do
+            if [ -z "${!v}" ]; then echo "::error::$v is not configured for $TARGET"; exit 1; fi
+          done
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          CDK_CONTEXT_JSON: ${{ vars.CDK_CONTEXT_JSON }}
+
+      # 1. Database migrations (never the demo seed) against THIS environment's Supabase project.
+      - uses: supabase/setup-cli@v1
+        with: { version: 2.120.0 }
+      - name: Apply migrations
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          supabase db push --include-all
+        env:
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      # 2. AWS infrastructure and Lambda code.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: npm run build -w services/api
+      - name: CDK deploy
+        working-directory: infra
+        run: |
+          HOP_CDK_CONFIG="$CDK_CONTEXT_JSON" npx cdk deploy "HotelOwnersPortal-$TARGET" -c env=$TARGET --require-approval never --outputs-file outputs.json
+        env:
+          CDK_CONTEXT_JSON: ${{ vars.CDK_CONTEXT_JSON }}
+
+      # 3. Web app.
+      - name: Build and publish SPA
+        run: |
+          STACK="HotelOwnersPortal-$TARGET"
+          API_URL=$(jq -r ".\"$STACK\".ApiUrl" infra/outputs.json)
+          BUCKET=$(jq -r ".\"$STACK\".WebBucketName" infra/outputs.json)
+          DIST=$(jq -r ".\"$STACK\".DistributionId" infra/outputs.json)
+          VITE_SUPABASE_URL="$SUPABASE_URL" VITE_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" VITE_API_URL="$API_URL" npm run build -w apps/web
+          aws s3 sync apps/web/dist "s3://$BUCKET" --delete --cache-control "public,max-age=31536000,immutable" --exclude index.html
+          aws s3 cp apps/web/dist/index.html "s3://$BUCKET/index.html" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$DIST" --paths /index.html
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+
+      - name: Smoke test
+        run: |
+          STACK="HotelOwnersPortal-$TARGET"
+          curl -fsS "$(jq -r ".\"$STACK\".ApiUrl" infra/outputs.json)/health"

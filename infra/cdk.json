@@ -1,0 +1,33 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "context": {
+    "staging": {
+      "account": "",
+      "region": "us-east-1",
+      "supabaseUrl": "",
+      "supabaseAnonKey": "",
+      "allowedOrigins": [],
+      "appDomainNames": [],
+      "certificateArn": "",
+      "inboundEmailDomain": "",
+      "notificationFromAddress": "",
+      "enableMalwareScanning": false,
+      "alarmEmail": ""
+    },
+    "production": {
+      "account": "",
+      "region": "us-east-1",
+      "supabaseUrl": "",
+      "supabaseAnonKey": "",
+      "allowedOrigins": [],
+      "appDomainNames": [],
+      "certificateArn": "",
+      "inboundEmailDomain": "",
+      "notificationFromAddress": "",
+      "enableMalwareScanning": true,
+      "alarmEmail": ""
+    },
+    "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true
+  }
+}

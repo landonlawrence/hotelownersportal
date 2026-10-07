@@ -31,7 +31,7 @@ export function sha256Hex(bytes: Uint8Array): string {
 }
 
 function safeName(filename: string): string {
-  return filename.replace(/[^\w.\-]+/g, '_').slice(-120);
+  return filename.replace(/[^\w.-]+/g, '_').slice(-120);
 }
 
 /**

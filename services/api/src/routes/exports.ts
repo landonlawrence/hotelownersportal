@@ -23,10 +23,10 @@ async function brandingFor(db: import('@supabase/supabase-js').SupabaseClient, c
 }
 
 function csvResponse(body: string, filename: string) {
-  return new Response(`﻿${body}\r\n`, {
+  return new Response(`\uFEFF${body}\r\n`, {
     headers: {
       'content-type': 'text/csv; charset=utf-8',
-      'content-disposition': `attachment; filename="${filename.replace(/[^\w.\-]/g, '_')}"`,
+      'content-disposition': `attachment; filename="${filename.replace(/[^\w.-]/g, '_')}"`,
       'cache-control': 'no-store',
     },
   });
