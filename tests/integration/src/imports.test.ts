@@ -96,7 +96,7 @@ describe('manual daily performance imports', () => {
     ws.addRow(['HV-PDX', new Date(Date.UTC(2017, 0, 1)), 148, 0, 10, 0, 1000, '', '', '']);
     const buf = await wb.xlsx.writeBuffer();
     const { token } = await signIn(USER.hvFinance);
-    const res = await upload(token, new File([buf], 'flash.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const res = await upload(token, new File([new Uint8Array(buf as ArrayBuffer)], 'flash.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     const r = await run(res.body.importRunId);
     expect(r.status).toBe('rejected');
     expect((await issues(res.body.importRunId)).map((i) => i.code)).toEqual(['before_opening']);

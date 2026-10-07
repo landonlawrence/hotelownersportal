@@ -248,7 +248,7 @@ describe('MFA for privileged permissions', () => {
     const { error: vErr } = await fin.db.auth.mfa.verify({ factorId: enroll!.id, challengeId: ch!.id, code: totp.generate() });
     expect(vErr).toBeNull();
     const { data: aal } = await fin.db.auth.mfa.getAuthenticatorAssuranceLevel();
-    expect(aal.currentLevel).toBe('aal2');
+    expect(aal?.currentLevel).toBe('aal2');
     const { data: drafts2 } = await fin.db.from('financial_reports').select('id').in('status', ['draft', 'in_review']).eq('company_id', COMPANY.harborview);
     expect((drafts2 ?? []).length).toBeGreaterThan(0);
     await fin.db.auth.mfa.unenroll({ factorId: enroll!.id });
