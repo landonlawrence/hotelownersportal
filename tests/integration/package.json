@@ -1,0 +1,21 @@
+{
+  "name": "@hop/integration-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hop/api": "0.1.0",
+    "@hop/core": "0.1.0",
+    "@supabase/supabase-js": "2.46.1",
+    "otpauth": "9.3.4",
+    "pg": "8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.8.6",
+    "@types/pg": "8.11.10"
+  }
+}

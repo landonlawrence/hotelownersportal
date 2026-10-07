@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+infra/cdk.out/
+.local-storage/
+playwright-report/
+test-results/
+supabase/.branches
+supabase/.temp
+.DS_Store
+*.tsbuildinfo

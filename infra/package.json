@@ -1,0 +1,20 @@
+{
+  "name": "@hop/infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "synth": "cdk synth",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.165.0",
+    "constructs": "10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.8.6",
+    "aws-cdk": "2.165.0",
+    "tsx": "4.19.2"
+  }
+}
