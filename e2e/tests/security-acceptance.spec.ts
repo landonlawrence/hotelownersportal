@@ -6,8 +6,8 @@ const SFO = '20000000-0000-4000-8000-000000000103';
 test.describe('owner authorized for two hotels cannot reach a third (UI)', () => {
   test('third hotel never appears and direct URLs show no data', async ({ page }) => {
     await login(page, 'olivia.owner@owners.example');
-    await expect(page.getByRole('link', { name: 'Harborview Seattle Waterfront' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Harborview Portland Pearl' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Harborview Seattle Waterfront', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Harborview Portland Pearl', exact: true })).toBeVisible();
     await expect(page.getByText('Embarcadero')).toHaveCount(0);
 
     await page.goto(`/properties/${SFO}`);
