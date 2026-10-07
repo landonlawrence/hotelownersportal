@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 import { config } from './config.js';
 import { HttpError } from './errors.js';
 
@@ -19,14 +19,21 @@ export async function verifyAccessToken(token: string): Promise<AuthContext> {
   const cfg = config();
   let payload: JWTPayload;
   try {
-    if (cfg.SUPABASE_JWT_SECRET) {
+    const { alg } = decodeProtectedHeader(token);
+    if (alg === 'HS256') {
+      // Legacy shared-secret projects only; asymmetric keys are preferred.
+      if (!cfg.SUPABASE_JWT_SECRET) throw new Error('HS256 tokens not accepted');
       ({ payload } = await jwtVerify(token, new TextEncoder().encode(cfg.SUPABASE_JWT_SECRET), {
         algorithms: ['HS256'],
         audience: 'authenticated',
       }));
     } else {
       jwks ??= createRemoteJWKSet(new URL(`${cfg.SUPABASE_URL}/auth/v1/.well-known/jwks.json`));
-      ({ payload } = await jwtVerify(token, jwks, { audience: 'authenticated', issuer: `${cfg.SUPABASE_URL}/auth/v1` }));
+      ({ payload } = await jwtVerify(token, jwks, {
+        algorithms: ['ES256', 'RS256'],
+        audience: 'authenticated',
+        issuer: `${cfg.SUPABASE_URL}/auth/v1`,
+      }));
     }
   } catch {
     throw new HttpError(401, 'Invalid or expired session', 'unauthenticated');

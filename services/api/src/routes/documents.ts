@@ -114,3 +114,25 @@ documents.get('/versions/:id/download', async (c) => {
   });
   return c.json({ url: signed.url, expires_at: signed.expiresAt, filename: v.original_filename });
 });
+
+/**
+ * Manual release (scanning not configured): the database authorizes the
+ * document manager and records the release; the API then promotes the object
+ * out of quarantine so it can be signed for download.
+ */
+documents.post('/versions/:id/release', async (c) => {
+  const versionId = c.req.param('id');
+  if (!z.string().uuid().safeParse(versionId).success) throw notFound();
+  const body = (await c.req.json().catch(() => ({}))) as { note?: string };
+  const { error } = await c.get('db').rpc('release_document_version', { p_version_id: versionId, p_note: body.note ?? '' });
+  if (error) throw fromPostgrest(error);
+  const svc = await serviceClient();
+  const { data } = await svc.from('document_versions').select('storage_key').eq('id', versionId).single();
+  const key = (data as { storage_key: string }).storage_key;
+  if (key.startsWith('quarantine/')) {
+    const cleanKey = key.replace(/^quarantine\//, 'clean/');
+    await storage().move(config().DOCUMENTS_BUCKET, key, cleanKey);
+    await svc.from('document_versions').update({ storage_key: cleanKey }).eq('id', versionId);
+  }
+  return c.json({ version_id: versionId, released: true });
+});

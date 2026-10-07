@@ -8,7 +8,7 @@ const schema = z.object({
   /** Service-role key. Locally from env; in AWS resolved from Secrets Manager at cold start. */
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(10).optional(),
   SUPABASE_SERVICE_ROLE_SECRET_ARN: z.string().optional(),
-  /** HS256 secret (local Supabase). When absent, tokens are verified against the project's JWKS. */
+  /** Only for legacy HS256 projects. Tokens signed with asymmetric keys are verified against the JWKS endpoint. */
   SUPABASE_JWT_SECRET: z.string().optional(),
   STORAGE_DRIVER: z.enum(['s3', 'local']).default('local'),
   DOCUMENTS_BUCKET: z.string().default('local-documents'),
