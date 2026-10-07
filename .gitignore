@@ -14,3 +14,7 @@ supabase/.branches
 supabase/.temp
 .DS_Store
 *.tsbuildinfo
+e2e/test-results/
+e2e/playwright-report/
+services/api/.env.local
+apps/web/.env.local

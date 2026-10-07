@@ -57,7 +57,8 @@ export function usePerformance(opts: { companyId: string; properties: Property[]
   return useQuery({
     queryKey: ['performance', opts.companyId, ids.join(','), opts.view, opts.asOf, opts.custom?.from, opts.custom?.to],
     enabled: ids.length > 0,
-    placeholderData: (prev) => prev,
+    // Keep the previous render while refetching, but never across companies or property scopes.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === opts.companyId && prevQuery?.queryKey[2] === ids.join(',') ? prev : undefined),
     queryFn: async (): Promise<PerformanceData> => {
       const range = resolvePeriod(opts.view, opts.asOf, opts.custom);
       const priorRange = priorYearRange(range);

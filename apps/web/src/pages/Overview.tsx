@@ -73,8 +73,8 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
             <KpiCard label="Occupancy" value={d.current.kpis.occupancyPct} kind="pct" priorYear={d.prior.kpis.occupancyPct} budget={!showBudget ? undefined : d.budget?.occupancyPct ?? null} partial={d.current.partial} hint="Rooms sold ÷ available room nights" />
             <KpiCard label="ADR" value={d.current.kpis.adr} kind="money_cents" currency={currency} priorYear={d.prior.kpis.adr} budget={!showBudget ? undefined : d.budget?.adr ?? null} partial={d.current.partial} hint="Room revenue ÷ rooms sold" />
             <KpiCard label="RevPAR" value={d.current.kpis.revpar} kind="money_cents" currency={currency} priorYear={d.prior.kpis.revpar} budget={!showBudget ? undefined : d.budget?.revpar ?? null} partial={d.current.partial} hint="Room revenue ÷ available room nights" />
-            <KpiCard label="Room revenue" value={d.current.kpis.roomRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.roomRevenue} budget={!showBudget ? undefined : d.budget?.roomRevenue ?? null} partial={d.current.partial} />
-            <KpiCard label="Total revenue" value={d.current.kpis.totalRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.totalRevenue} budget={!showBudget ? undefined : d.budget?.totalRevenue ?? null} partial={d.current.partial} />
+            <KpiCard label="Room revenue" value={d.current.kpis.roomRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.roomRevenue} budget={!showBudget ? undefined : d.budget?.roomRevenue ?? null} partial={d.current.partial} comparisonNote={d.current.partial ? 'Comparisons hidden — incomplete period' : undefined} />
+            <KpiCard label="Total revenue" value={d.current.kpis.totalRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.totalRevenue} budget={!showBudget ? undefined : d.budget?.totalRevenue ?? null} partial={d.current.partial} comparisonNote={d.current.partial ? 'Comparisons hidden — incomplete period' : undefined} />
           </div>
           {!d.budget && showBudget && <p className="small muted">Budget comparison unavailable: not every selected property has an approved budget for this period.</p>}
 
@@ -100,7 +100,8 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
                 </thead>
                 <tbody>
                   {scope.map((p) => {
-                    const cur = d.current.properties.find((x) => x.propertyId === p.id)!;
+                    const cur = d.current.properties.find((x) => x.propertyId === p.id);
+                    if (!cur) return null;
                     const py = d.prior.properties.find((x) => x.propertyId === p.id);
                     const bud = d.budgetByProperty.get(p.id);
                     const vsPy = cur.kpis.revpar !== null && py?.kpis.revpar ? cur.kpis.revpar / py.kpis.revpar - 1 : null;
@@ -118,7 +119,7 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
                         {showBudget && <DeltaCell value={vsBud} />}
                         <td className="num">{fmtKpi(cur.kpis.roomRevenue, 'money', currency)}</td>
                         <td><CoverageBadge coverage={cur.coverage} /></td>
-                        <td><FreshnessBadge f={d.freshness.get(p.id)!} /></td>
+                        <td>{d.freshness.get(p.id) && <FreshnessBadge f={d.freshness.get(p.id)!} />}</td>
                       </tr>
                     );
                   })}

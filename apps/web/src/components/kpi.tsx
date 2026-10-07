@@ -33,6 +33,7 @@ export function KpiCard({
   currency,
   partial,
   hint,
+  comparisonNote,
 }: {
   label: string;
   value: number | null;
@@ -42,6 +43,8 @@ export function KpiCard({
   currency?: string;
   partial?: boolean;
   hint?: string;
+  /** Replaces comparisons when they would be misleading (e.g. totals with partial coverage). */
+  comparisonNote?: string;
 }) {
   return (
     <div className="card kpi" title={hint}>
@@ -51,8 +54,9 @@ export function KpiCard({
       </div>
       <span className="value">{fmtKpi(value, kind, currency)}</span>
       <div className="deltas">
-        {priorYear !== undefined && <DeltaLine label="vs prior year" current={value} comparison={priorYear} kind={kind} />}
-        {budget !== undefined && <DeltaLine label="vs budget" current={value} comparison={budget} kind={kind} />}
+        {comparisonNote && <span className="delta-flat">{comparisonNote}</span>}
+        {!comparisonNote && priorYear !== undefined && <DeltaLine label="vs prior year" current={value} comparison={priorYear} kind={kind} />}
+        {!comparisonNote && budget !== undefined && <DeltaLine label="vs budget" current={value} comparison={budget} kind={kind} />}
       </div>
     </div>
   );

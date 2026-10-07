@@ -48,10 +48,11 @@ function Users() {
   const { properties, ctx } = usePortal();
   const q = useQuery({
     queryKey: ['members', company.company_id],
+    refetchOnMount: 'always',
     queryFn: async () => unwrap(await supabase.from('company_memberships').select('id, user_id, role, status, all_properties, title, created_at, revoked_at, revoke_reason, property_access_grants(id, property_id, permissions, revoked_at, expires_at), membership_permission_overrides(permission_key, effect)').eq('company_id', company.company_id).order('status').order('role')) as unknown as Member[],
   });
   const profiles = useQuery({
-    queryKey: ['member-profiles', company.company_id, q.data?.length],
+    queryKey: ['member-profiles', company.company_id, q.data?.map((m) => m.user_id).join(',')],
     enabled: !!q.data,
     queryFn: async () => new Map((unwrap(await supabase.from('profiles').select('id, email, full_name').in('id', q.data!.map((m) => m.user_id))) as Array<{ id: string; email: string; full_name: string | null }>).map((p) => [p.id, p])),
   });
