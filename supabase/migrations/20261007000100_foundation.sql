@@ -495,8 +495,10 @@ $$;
 
 -- Does an active membership (role + overrides) include a permission, honouring
 -- company modules, company status and MFA requirements? Property access is NOT
--- evaluated here.
-create or replace function app.membership_allows(p_membership_id uuid, p_perm text) returns boolean
+-- evaluated here. p_aal = 'any' skips the MFA check (used for notifications and
+-- background jobs that act for a user whose request was already verified).
+create or replace function app.membership_allows_user(p_membership_id uuid, p_user uuid, p_perm text, p_aal text)
+returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1
@@ -505,13 +507,13 @@ language sql stable security definer set search_path = '' as $$
     join public.permissions p on p.key = p_perm
     where m.id = p_membership_id
       and m.status = 'active'
-      and m.user_id = auth.uid()
+      and m.user_id = p_user
       -- module enabled (admin module can never be disabled)
       and (p.module = 'admin' or coalesce((
             select cm.enabled from public.company_modules cm
             where cm.company_id = m.company_id and cm.module = p.module), true))
       -- MFA for privileged permissions
-      and (not p.privileged or not c.require_mfa_for_privileged or app.current_aal() = 'aal2')
+      and (not p.privileged or not c.require_mfa_for_privileged or p_aal in ('aal2', 'any'))
       -- role default or explicit allow, and no explicit deny
       and (
         exists (select 1 from public.role_permission_defaults d where d.role = m.role and d.permission_key = p_perm)
@@ -521,6 +523,48 @@ language sql stable security definer set search_path = '' as $$
       and not exists (select 1 from public.membership_permission_overrides o
                       where o.membership_id = m.id and o.permission_key = p_perm and o.effect = 'deny')
   );
+$$;
+
+create or replace function app.membership_allows(p_membership_id uuid, p_perm text) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select app.membership_allows_user(p_membership_id, auth.uid(), p_perm, app.current_aal());
+$$;
+
+-- Property ids on which a user holds a permission through memberships + grants.
+create or replace function app.user_property_ids(p_user uuid, p_perm text, p_aal text) returns uuid[]
+language sql stable security definer set search_path = '' as $$
+  select coalesce(array_agg(distinct p.id), '{}'::uuid[])
+  from public.company_memberships m
+  join public.properties p on p.company_id = m.company_id
+  where m.user_id = p_user
+    and m.status = 'active'
+    and app.membership_allows_user(m.id, p_user, p_perm, p_aal)
+    and (
+      m.all_properties
+      or exists (
+        select 1 from public.property_access_grants g
+        where g.membership_id = m.id
+          and g.property_id = p.id
+          and g.revoked_at is null
+          and (g.expires_at is null or g.expires_at > now())
+          and (g.permissions is null or p_perm = any (g.permissions))
+      )
+    );
+$$;
+
+-- Background-job / notification check for a specific user (MFA not applicable).
+create or replace function app.user_has_permission(p_user uuid, p_perm text, p_company_id uuid, p_property_id uuid default null)
+returns boolean
+language sql stable security definer set search_path = '' as $$
+  select case
+    when p_user is null or p_company_id is null then false
+    when p_property_id is null then exists (
+      select 1 from public.company_memberships m
+      where m.user_id = p_user and m.company_id = p_company_id and m.status = 'active'
+        and app.membership_allows_user(m.id, p_user, p_perm, 'any'))
+    else exists (select 1 from public.properties p where p.id = p_property_id and p.company_id = p_company_id)
+         and p_property_id = any (app.user_property_ids(p_user, p_perm, 'any'))
+  end;
 $$;
 
 -- Active support session for the current user in a company?
@@ -545,23 +589,7 @@ $$;
 create or replace function app.permitted_property_ids(p_perm text) returns uuid[]
 language sql stable security definer set search_path = '' as $$
   select coalesce(array_agg(distinct pid), '{}'::uuid[]) from (
-    select p.id as pid
-    from public.company_memberships m
-    join public.properties p on p.company_id = m.company_id
-    where m.user_id = auth.uid()
-      and m.status = 'active'
-      and app.membership_allows(m.id, p_perm)
-      and (
-        m.all_properties
-        or exists (
-          select 1 from public.property_access_grants g
-          where g.membership_id = m.id
-            and g.property_id = p.id
-            and g.revoked_at is null
-            and (g.expires_at is null or g.expires_at > now())
-            and (g.permissions is null or p_perm = any (g.permissions))
-        )
-      )
+    select unnest(app.user_property_ids(auth.uid(), p_perm, app.current_aal())) as pid
     union
     select p.id
     from public.support_access_sessions s
@@ -722,6 +750,10 @@ revoke all on all tables in schema public from anon, authenticated;
 revoke all on all functions in schema public from anon;
 revoke all on all functions in schema app from public;
 grant execute on all functions in schema app to authenticated, service_role;
+-- Functions that evaluate permissions for an arbitrary user are not callable by clients.
+revoke execute on function app.membership_allows_user(uuid, uuid, text, text) from authenticated;
+revoke execute on function app.user_property_ids(uuid, text, text) from authenticated;
+revoke execute on function app.user_has_permission(uuid, text, uuid, uuid) from authenticated;
 
 grant select on public.platform_settings, public.permissions, public.role_permission_defaults,
   public.support_session_permissions to authenticated;
