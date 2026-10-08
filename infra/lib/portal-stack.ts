@@ -29,6 +29,7 @@ import {
   aws_sns as sns,
   aws_sns_subscriptions as subs,
   aws_sqs as sqs,
+  aws_wafv2 as wafv2,
 } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
@@ -52,6 +53,14 @@ export interface PortalStackProps extends StackProps {
   enableMalwareScanning: boolean;
   /** Email for operational alarms. */
   alarmEmail?: string;
+  /**
+   * WAF (paid). HTTP APIs cannot attach WAF directly, so when enabled the API is
+   * also served through CloudFront at /api/* and one web ACL protects both.
+   * Requires the stack to be deployed in us-east-1 (CloudFront-scoped WAF).
+   */
+  enableWaf?: boolean;
+  /** Requests per 5 minutes per IP before WAF blocks (default 2000). */
+  wafRateLimit?: number;
   /** Directory containing built Lambda bundles (services/api/dist/lambda). */
   lambdaAssetDir: string;
 }
@@ -322,7 +331,51 @@ export class PortalStack extends Stack {
         referrerPolicy: { referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN, override: true },
       },
     });
+    let webAclArn: string | undefined;
+    if (props.enableWaf) {
+      if (props.env?.region && props.env.region !== 'us-east-1') throw new Error('enableWaf requires the stack in us-east-1 (CloudFront scope)');
+      const managed = (name: string, priority: number) => ({
+        name,
+        priority,
+        overrideAction: { none: {} },
+        statement: { managedRuleGroupStatement: { vendorName: 'AWS', name } },
+        visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: name, sampledRequestsEnabled: true },
+      });
+      const acl = new wafv2.CfnWebACL(this, 'WebAcl', {
+        scope: 'CLOUDFRONT',
+        defaultAction: { allow: {} },
+        visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: `hop-${props.envName}-waf`, sampledRequestsEnabled: true },
+        rules: [
+          {
+            name: 'RateLimitPerIp',
+            priority: 0,
+            action: { block: {} },
+            statement: { rateBasedStatement: { limit: props.wafRateLimit ?? 2000, aggregateKeyType: 'IP' } },
+            visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'RateLimitPerIp', sampledRequestsEnabled: true },
+          },
+          managed('AWSManagedRulesAmazonIpReputationList', 1),
+          managed('AWSManagedRulesCommonRuleSet', 2),
+          managed('AWSManagedRulesKnownBadInputsRuleSet', 3),
+        ],
+      });
+      webAclArn = acl.attrArn;
+    }
+    const apiOrigin = new origins.HttpOrigin(`${httpApi.apiId}.execute-api.${this.region}.${this.urlSuffix}`, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+    });
     const distribution = new cloudfront.Distribution(this, 'WebDistribution', {
+      webAclId: webAclArn,
+      additionalBehaviors: props.enableWaf
+        ? {
+            '/api/*': {
+              origin: apiOrigin,
+              viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+              allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+              cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+              originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            },
+          }
+        : undefined,
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(webBucket),
@@ -363,6 +416,7 @@ export class PortalStack extends Stack {
 
     // ---------------------------------------------------------------- outputs
     new CfnOutput(this, 'ApiUrl', { value: httpApi.apiEndpoint });
+    if (props.enableWaf) new CfnOutput(this, 'ProtectedApiUrl', { value: `https://${props.appDomainNames?.[0] ?? distribution.distributionDomainName}/api` });
     new CfnOutput(this, 'WebBucketName', { value: webBucket.bucketName });
     new CfnOutput(this, 'DistributionId', { value: distribution.distributionId });
     new CfnOutput(this, 'DistributionDomain', { value: distribution.distributionDomainName });

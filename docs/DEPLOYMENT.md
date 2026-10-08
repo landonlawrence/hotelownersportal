@@ -29,7 +29,7 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
 | `SUPABASE_PROJECT_REF` | var | `abcd1234` |
 | `SUPABASE_URL` | var | `https://abcd1234.supabase.co` |
 | `SUPABASE_ANON_KEY` | var | publishable key (browser-safe) |
-| `CDK_CONTEXT_JSON` | var | `{"account":"123456789012","supabaseUrl":"…","supabaseAnonKey":"…","allowedOrigins":["https://owners.example.com"],"appDomainNames":["owners.example.com"],"certificateArn":"arn:aws:acm:us-east-1:…","inboundEmailDomain":"inbound.example.com","notificationFromAddress":"no-reply@example.com","enableMalwareScanning":true,"alarmEmail":"ops@example.com"}` |
+| `CDK_CONTEXT_JSON` | var | `{"account":"123456789012","supabaseUrl":"…","supabaseAnonKey":"…","allowedOrigins":["https://owners.example.com"],"appDomainNames":["owners.example.com"],"certificateArn":"arn:aws:acm:us-east-1:…","inboundEmailDomain":"inbound.example.com","notificationFromAddress":"no-reply@example.com","enableMalwareScanning":true,"enableWaf":true,"alarmEmail":"ops@example.com"}` |
 | `SUPABASE_ACCESS_TOKEN` | secret | Supabase personal access token (deploy only) |
 | `SUPABASE_DB_PASSWORD` | secret | database password (deploy only) |
 | `STAGING_ENABLED` | repo var | `true` to enable automatic staging deploys |
@@ -44,6 +44,10 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
    - Activate the receipt rule set (only one can be active per account/region): `aws ses set-active-receipt-rule-set --rule-set-name hop-<env>-inbound`.
 7. **Custom domains** — issue an ACM certificate in `us-east-1` covering the portal domains; add `appDomainNames` + `certificateArn`; point DNS (CNAME/ALIAS) at the CloudFront distribution; insert/verify rows in `company_domains` (platform admin) after confirming the DNS TXT token.
 8. **Bootstrap the first platform admin** (SQL editor, once): `insert into public.platform_admins (user_id) values ('<auth user id>');` then provision companies from the Platform tab.
+
+## WAF and API routing
+
+With `enableWaf: true` (default in the production context) the stack creates a CloudFront-scoped web ACL (per-IP rate limit, AWS IP reputation list, common rule set, known bad inputs) and serves the API through CloudFront at `/api/*`, because API Gateway HTTP APIs cannot attach WAF directly. The deploy workflow then builds the SPA with `VITE_API_URL=https://<portal domain>/api` (stack output `ProtectedApiUrl`). The stack must be in `us-east-1` for CloudFront-scoped WAF.
 
 ## Required environment variables
 

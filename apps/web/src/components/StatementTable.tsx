@@ -1,5 +1,5 @@
 import { formatCurrency, formatFraction, formatNumber, type Variance } from '@hop/core';
-import type { StatementRow } from '../lib/statement';
+import type { StatementRow } from '@hop/core';
 
 function VarianceCells({ v, currency }: { v: Variance; currency: string }) {
   const cls = v.favourable === null ? '' : v.favourable ? 'delta-good' : 'delta-bad';

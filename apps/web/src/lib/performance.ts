@@ -62,7 +62,7 @@ export function usePerformance(opts: { companyId: string; properties: Property[]
     queryFn: async (): Promise<PerformanceData> => {
       const range = resolvePeriod(opts.view, opts.asOf, opts.custom);
       const priorRange = priorYearRange(range);
-      const infos = opts.properties.map((p) => ({ id: p.id, openedOn: p.opened_on }));
+      const infos = opts.properties.map((p) => ({ id: p.id, openedOn: p.opened_on, status: p.status }));
       const trendGrain: 'day' | 'month' = opts.view === 'ytd' || opts.view === 'custom' ? 'month' : 'day';
       const trendRange: DateRange =
         trendGrain === 'day'

@@ -2,7 +2,7 @@
 # Writes local env files from the running local Supabase stack.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATUS=$(npx supabase status -o json 2>/dev/null)
+STATUS=$(npx supabase status -o json 2>/dev/null < /dev/null)
 get() { echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['$1'])"; }
 API_URL=$(get API_URL); ANON=$(get ANON_KEY); SERVICE=$(get SERVICE_ROLE_KEY); JWT=$(get JWT_SECRET)
 cat > services/api/.env.local <<ENV

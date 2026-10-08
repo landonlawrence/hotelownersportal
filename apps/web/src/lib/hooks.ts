@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from './supabase';
-import type { Account } from './statement';
+import type { Account } from '@hop/core';
 
 export function useAccounts(companyId: string) {
   return useQuery({

@@ -190,3 +190,12 @@ table.data th.num, table.data td.num { text-align: right; }
 .company-switcher select { font-weight: 600; }
 .user-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .avatar { width: 28px; height: 28px; border-radius: 999px; background: var(--brand-accent); color: var(--brand-on-accent); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
+
+@media (max-width: 640px) {
+  .topbar { gap: 8px; flex-wrap: wrap; }
+  .topbar .user-chip span:not(.avatar) { display: none; }
+  .company-switcher > span { display: none; }
+  .company-switcher select { max-width: 52vw; }
+  .page-header h1 { font-size: 20px; }
+  .auth-hero .logo img { max-width: 70vw; }
+}

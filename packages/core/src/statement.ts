@@ -1,4 +1,4 @@
-import { variance, type AccountNature, type Variance } from '@hop/core';
+import { variance, type AccountNature, type Variance } from './variance.js';
 
 export interface Account {
   id: string;

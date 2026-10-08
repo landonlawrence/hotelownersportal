@@ -3,9 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { computeKpis, formatCurrency, formatPercent, REMAINING_FUNDS_DEFINITION } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
-import { downloadDocumentVersion } from '../lib/api';
+import { downloadDocumentVersion, downloadFromApi } from '../lib/api';
 import { useRpc } from '../lib/hooks';
-import { buildStatement, type Account } from '../lib/statement';
+import { buildStatement, type Account } from '@hop/core';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';
 import { KpiCard } from '../components/kpi';
@@ -101,7 +101,7 @@ export function ReportPackagePage() {
         subtitle={<>{pkg.title} · revision {pkg.revision} · <StatusBadge status={pkg.status} />{pkg.published_at && ` · published ${fmtDate(pkg.published_at)}`}</>}
         actions={
           <>
-            <button className="btn" onClick={() => window.print()}>Print / save PDF</button>
+            <button className="btn" onClick={() => downloadFromApi(`/exports/packages/${pkg.id}.pdf`, 'owner-report.pdf')}>Download PDF</button>
             {['draft', 'in_review'].includes(pkg.status) && can('reports.publish', pkg.property_id) && <button className="btn btn-primary" onClick={() => setAction('publish')}>Publish to owners</button>}
             {pkg.status === 'published' && can('reports.edit', pkg.property_id) && <button className="btn" onClick={() => setAction('revise')}>Create revision</button>}
           </>

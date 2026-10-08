@@ -27,7 +27,7 @@ const Platform = lazy(() => import('./pages/Admin').then((m) => ({ default: m.Pl
 const SecurityPage = lazy(() => import('./pages/Security').then((m) => ({ default: m.SecurityPage })));
 
 function RequireAuth() {
-  const { session, sessionLoading, ctx, ctxLoading, company } = usePortal();
+  const { session, sessionLoading, ctx, ctxLoading, company, refresh } = usePortal();
   const location = useLocation();
   if (sessionLoading) return <Loading label="Starting…" />;
   if (!session) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
@@ -47,7 +47,10 @@ function RequireAuth() {
             <Empty title="No active access">
               Your account ({ctx.email}) is not currently linked to any management company, or your access has been revoked. Contact your management company if you believe this is a mistake.
             </Empty>
-            <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+            <div className="row">
+              <button className="btn btn-primary" onClick={() => void refresh()}>Check again</button>
+              <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+            </div>
           </Card>
         )}
       </div>

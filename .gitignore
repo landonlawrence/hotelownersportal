@@ -18,3 +18,4 @@ e2e/test-results/
 e2e/playwright-report/
 services/api/.env.local
 apps/web/.env.local
+.local-logs/

@@ -85,7 +85,8 @@ jobs:
       - name: Build and publish SPA
         run: |
           STACK="HotelOwnersPortal-$TARGET"
-          API_URL=$(jq -r ".\"$STACK\".ApiUrl" infra/outputs.json)
+          # Prefer the WAF-protected same-origin /api path when the stack provides it.
+          API_URL=$(jq -r ".\"$STACK\".ProtectedApiUrl // .\"$STACK\".ApiUrl" infra/outputs.json)
           BUCKET=$(jq -r ".\"$STACK\".WebBucketName" infra/outputs.json)
           DIST=$(jq -r ".\"$STACK\".DistributionId" infra/outputs.json)
           VITE_SUPABASE_URL="$SUPABASE_URL" VITE_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" VITE_API_URL="$API_URL" npm run build -w apps/web

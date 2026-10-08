@@ -45,6 +45,9 @@ Per-membership allow/deny overrides and per-property permission lists refine the
 | Support staff over-reach | no standing access; time-boxed, MFA-gated, read-only, audited sessions endable by company admins | `foundation.test.ts` |
 | Client privilege defaults | default privileges revoked; test asserts `anon` has no table grants and every table has RLS | `foundation.test.ts` |
 | Secrets exposure | browser has publishable key only; lint rule; Lambda env has secret ARN only | CDK assertion tests, ESLint |
+| Secrets in audit trail | row audits redact route tokens, verification tokens and token hashes | `admin-tools.test.ts` |
+| Abuse / common web attacks | optional WAF (`enableWaf`, on in production context): per-IP rate limit, AWS IP reputation, common and known-bad-input rule sets; API served via CloudFront `/api/*` so the same ACL applies | CDK assertion tests |
+| Exported documents | PDFs/CSVs generated per request as the user (RLS), unpublished content watermarked, every export audited | `admin-tools.test.ts`, `security-acceptance.test.ts` |
 
 ## Audit
 
@@ -53,6 +56,5 @@ Per-membership allow/deny overrides and per-property permission lists refine the
 ## Known limitations / follow-ups
 
 - Login rate limiting and lockout rely on Supabase Auth defaults; review per-project settings before production.
-- WAF on CloudFront/API Gateway is not provisioned by default (cost); recommended for production.
 - Custom-domain verification (DNS TXT + ACM certificate) is an operational step performed by the platform team.
 - PDF statements are generated through the browser print view; server-rendered branded PDFs are a planned enhancement.

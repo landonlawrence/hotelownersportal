@@ -150,3 +150,16 @@ describe('proration and deltas', () => {
     expect(kpiDelta(10, 0).changePct).toBeNull();
   });
 });
+
+describe('summarizePeriod coverage rules', () => {
+  it('does not expect data from onboarding/archived properties unless they report', async () => {
+    const { summarizePeriod } = await import('../src/performance');
+    const row = { property_id: 'a', bucket: '2026-05-01', available_room_nights: 3100, rooms_sold: 2500, room_revenue: 400000, total_revenue: 500000, total_revenue_days: 31, reported_days: 31 };
+    const range = { from: '2026-05-01', to: '2026-05-31' };
+    const s = summarizePeriod([row], [{ id: 'a', status: 'active' }, { id: 'new', status: 'onboarding' }, { id: 'old', status: 'archived' }], range, range.to);
+    expect(s.partial).toBe(false);
+    expect(s.coverage.expectedDays).toBe(31);
+    const withActiveGap = summarizePeriod([row], [{ id: 'a', status: 'active' }, { id: 'b', status: 'active' }], range, range.to);
+    expect(withActiveGap.partial).toBe(true);
+  });
+});

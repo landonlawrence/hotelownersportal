@@ -25,6 +25,7 @@
       "inboundEmailDomain": "",
       "notificationFromAddress": "",
       "enableMalwareScanning": true,
+      "enableWaf": true,
       "alarmEmail": ""
     },
     "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,

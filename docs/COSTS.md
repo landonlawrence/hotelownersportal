@@ -15,6 +15,6 @@ No paid resources have been created. Estimates are directional for a pilot (≈5
 | GuardDuty Malware Protection for S3 | GB scanned + objects evaluated | Optional (`enableMalwareScanning`); scales with upload volume. When off, uploads require manual release. |
 | CloudWatch | Log ingestion/storage (1-year retention in prod), alarms, X-Ray traces | Low–moderate; reduce retention or sampling if needed. |
 | Secrets Manager | Per secret/month | Negligible. |
-| WAF (not provisioned) | Web ACL + rules + requests | Recommended for production; adds a fixed monthly cost. |
+| WAF (`enableWaf`, on for production) | Web ACL + 4 rules + requests | Fixed monthly cost per ACL/rule plus per-million requests. |
 
 Deliberately avoided: VPC/NAT gateways, RDS, always-on containers, OpenSearch — none are required because Supabase hosts the database and all compute is serverless.

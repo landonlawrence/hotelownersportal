@@ -35,8 +35,8 @@ describe('performance roll-ups', () => {
     const range = { from: '2026-05-01', to: '2026-05-31' };
     const { data } = await db.rpc('performance_rollup', { p_company_id: COMPANY.harborview, p_from: range.from, p_to: range.to, p_grain: 'total', p_property_ids: null });
     const rows = data as RollupRow[];
-    const { data: props } = await db.from('properties').select('id, opened_on');
-    const s = summarizePeriod(rows, props!.map((p) => ({ id: p.id, openedOn: p.opened_on })), range, range.to);
+    const { data: props } = await db.from('properties').select('id, opened_on, status');
+    const s = summarizePeriod(rows, props!.map((p) => ({ id: p.id, openedOn: p.opened_on, status: p.status })), range, range.to);
     const { rows: direct } = await sql().query(
       `select sum(rooms_sold)::numeric / sum(physical_rooms - rooms_out_of_order) * 100 as occ, sum(room_revenue) / sum(rooms_sold) as adr
        from public.daily_performance where company_id = $1 and business_date between $2 and $3`,
@@ -53,8 +53,8 @@ describe('performance roll-ups', () => {
     const { db } = await signIn(USER.spAdmin);
     const range = { from: '2026-09-01', to: '2026-09-30' };
     const { data } = await db.rpc('performance_rollup', { p_company_id: COMPANY.summit, p_from: range.from, p_to: range.to, p_grain: 'total', p_property_ids: null });
-    const { data: props } = await db.from('properties').select('id, opened_on');
-    const s = summarizePeriod(data as RollupRow[], props!.map((p) => ({ id: p.id, openedOn: p.opened_on })), range, range.to);
+    const { data: props } = await db.from('properties').select('id, opened_on, status');
+    const s = summarizePeriod(data as RollupRow[], props!.map((p) => ({ id: p.id, openedOn: p.opened_on, status: p.status })), range, range.to);
     expect(s.partial).toBe(true);
     expect(s.propertiesWithGaps).toEqual([PROPERTY.aus]);
     expect(s.coverage.expectedDays - s.coverage.reportedDays).toBe(3);

@@ -19,13 +19,14 @@ export function AcceptInvitePage() {
 
   useEffect(() => {
     if (!session || !token || done) return;
-    supabase.rpc('accept_invitation', { p_token: token }).then(({ error: err }) => {
-      if (err) setError(err.message);
-      else {
-        setDone(true);
-        void qc.invalidateQueries();
-        setTimeout(() => navigate('/'), 800);
-      }
+    supabase.rpc('accept_invitation', { p_token: token }).then(async ({ error: err }) => {
+      if (err) return setError(err.message);
+      setDone(true);
+      // Make sure the new membership is loaded before entering the portal.
+      await qc.resetQueries({ queryKey: ['my-context'] });
+      await qc.refetchQueries({ queryKey: ['my-context'] });
+      await qc.invalidateQueries();
+      navigate('/');
     });
   }, [session, token, done, navigate, qc]);
 

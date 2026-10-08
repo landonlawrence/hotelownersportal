@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listParsers } from '@hop/core';
+import { IngestionSourcesCard } from './IngestionSources';
 import { supabase, unwrap } from '../lib/supabase';
 import { apiFetch } from '../lib/api';
 import { usePortal, useCompany } from '../state/portal';
@@ -67,21 +68,7 @@ export function ImportsPage() {
           </div>
         )}
       </Card>
-      <Card flush title="Ingestion sources & supported formats">
-        <div className="table-wrap">
-          <table className="data">
-            <thead><tr><th>Source</th><th>Channel</th><th>Report</th><th>Revisions</th><th>Expected</th><th>Active</th></tr></thead>
-            <tbody>
-              {(sources.data ?? []).map((s) => (
-                <tr key={s.id}><td>{s.name}</td><td>{s.channel}</td><td>{TYPE_LABEL[s.report_type]}</td><td>{s.revision_policy === 'replace' ? 'Replace (history kept)' : 'Require review'}</td><td>{s.expected_cadence}</td><td>{s.active ? 'Yes' : 'No'}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ padding: 16 }} className="small muted">
-          Supported formats: {listParsers().map((p) => p.label).join('; ')}. PMS-specific formats are added only after verification against real sample reports.
-        </div>
-      </Card>
+      <IngestionSourcesCard />
       {uploading && <UploadImport onClose={() => setUploading(false)} sources={sources.data ?? []} />}
     </div>
   );

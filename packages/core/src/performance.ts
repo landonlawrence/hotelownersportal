@@ -20,7 +20,11 @@ export interface RollupRow {
 export interface PropertyInfo {
   id: string;
   openedOn?: IsoDate | null;
+  /** Onboarding/archived properties are not expected to report; they only count when they do. */
+  status?: string | null;
 }
+
+const NOT_EXPECTED = new Set(['onboarding', 'archived']);
 
 const n = (v: number | string | null | undefined): number => (v === null || v === undefined ? 0 : Number(v));
 
@@ -40,7 +44,9 @@ export function summarizePeriod(rows: RollupRow[], properties: PropertyInfo[], r
   const byProp = new Map(rows.map((r) => [r.property_id, r]));
   const sums: PropertyPeriodSums[] = properties.map((p) => {
     const r = byProp.get(p.id);
-    const expectedDays = expectedDaysForProperty(range, { openedOn: p.openedOn ?? null, asOf });
+    const expectedDays = NOT_EXPECTED.has(p.status ?? '')
+      ? (r?.reported_days ?? 0)
+      : expectedDaysForProperty(range, { openedOn: p.openedOn ?? null, asOf });
     if (!r) {
       return { propertyId: p.id, availableRoomNights: 0, roomsSold: 0, roomRevenue: 0, totalRevenue: 0, reportedDays: 0, expectedDays };
     }

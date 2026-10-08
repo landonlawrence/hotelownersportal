@@ -17,11 +17,11 @@ Requirements: Node 22, Docker.
 
 ```bash
 npm install
-npm run db:start          # local Supabase (Docker) + writes .env.local files
-npm run db:reset          # migrations + FICTIONAL demo seed + demo PDFs
-npm run start -w services/api   # API + in-process worker on :8787
-npm run dev:web           # Vite on :5173
+bash scripts/dev-up.sh    # Docker → local Supabase → migrations + FICTIONAL demo seed → API (:8787) + web (:5173)
+RESET=0 bash scripts/dev-up.sh   # restart servers, keep database contents
 ```
+
+Or step by step: `npm run db:start`, `npm run db:reset`, `npm run start -w services/api`, `npm run dev:web`. Logs go to `.local-logs/`.
 
 If Docker Hub is reachable but `public.ecr.aws` is not, prefix `db:start` with `SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io`.
 

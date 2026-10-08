@@ -37,18 +37,27 @@ export function createApp() {
   });
 
   app.get('/health', (c) => c.json({ ok: true, env: config().APP_ENV }));
+  // Public, non-secret configuration for the SPA.
+  app.get('/meta', (c) => c.json({ inboundEmailDomain: config().INBOUND_EMAIL_DOMAIN }));
   app.route('/documents', documents);
   app.route('/imports', imports);
   app.route('/exports', exportsRoute);
   app.route('/admin', admin);
   if (localStorageEnabled()) app.route('/local-storage', localStorageRoutes);
 
-  app.onError((err, c) => {
+  const onError = (err: Error, c: Parameters<Parameters<typeof app.onError>[0]>[1]) => {
     if (err instanceof HttpError) return c.json({ error: err.code, message: err.message }, err.status as 400);
     if (err instanceof HTTPException) return c.json({ error: 'error', message: err.message }, err.status);
     console.error(JSON.stringify({ level: 'error', requestId: c.get('requestId'), message: err.message, stack: err.stack }));
     return c.json({ error: 'internal', message: 'Internal error', request_id: c.get('requestId') }, 500);
-  });
+  };
+  app.onError(onError);
   app.notFound((c) => c.json({ error: 'not_found', message: 'Not found' }, 404));
-  return app;
+  // The same routes are served under /api when the API is fronted by CloudFront + WAF.
+  const outer = new Hono<AppEnv>();
+  outer.route('/api', app);
+  outer.route('/', app);
+  outer.onError(onError);
+  outer.notFound((c) => c.json({ error: 'not_found', message: 'Not found' }, 404));
+  return outer;
 }

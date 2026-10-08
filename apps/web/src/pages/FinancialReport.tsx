@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatCurrency } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
 import { downloadDocumentVersion, downloadFromApi } from '../lib/api';
-import { buildStatement } from '../lib/statement';
+import { buildStatement } from '@hop/core';
 import { useAccounts, useDisplayNames, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';
@@ -94,6 +94,7 @@ export function FinancialReportPage() {
         actions={
           <>
             {pdf.data?.current_version_id && <button className="btn" onClick={() => downloadDocumentVersion(pdf.data!.current_version_id!)}>Published P&L (PDF)</button>}
+            <button className="btn" onClick={() => downloadFromApi(`/exports/financial-reports/${r.id}.pdf`, 'statement.pdf')}>Download PDF</button>
             <button className="btn" onClick={() => downloadFromApi(`/exports/financial-reports/${r.id}.csv`, 'statement.csv')}>Export CSV</button>
             {r.status === 'draft' && canEdit && <button className="btn btn-primary" onClick={() => setAction('submit')}>Submit for review</button>}
             {r.status === 'in_review' && canPublish && <button className="btn" onClick={() => setAction('return')}>Return to draft</button>}

@@ -26,7 +26,7 @@ beforeAll(() => {
     allowedOrigins: ['https://owners.example.com'],
     lambdaAssetDir: assets(),
   };
-  template = Template.fromStack(new PortalStack(new App(), 'Full', { ...base, envName: 'production', inboundEmailDomain: 'inbound.example.com', notificationFromAddress: 'no-reply@example.com', enableMalwareScanning: true, alarmEmail: 'ops@example.com' }));
+  template = Template.fromStack(new PortalStack(new App(), 'Full', { ...base, envName: 'production', inboundEmailDomain: 'inbound.example.com', notificationFromAddress: 'no-reply@example.com', enableMalwareScanning: true, alarmEmail: 'ops@example.com', enableWaf: true }));
   minimal = Template.fromStack(new PortalStack(new App(), 'Min', { ...base, envName: 'staging', enableMalwareScanning: false }));
 });
 
@@ -92,6 +92,21 @@ describe('processing', () => {
 });
 
 describe('edge and monitoring', () => {
+  it('optional WAF protects the SPA and the API (served via CloudFront /api/*) with managed rules and a rate limit', () => {
+    template.hasResourceProperties('AWS::WAFv2::WebACL', {
+      Scope: 'CLOUDFRONT',
+      Rules: Match.arrayWith([
+        Match.objectLike({ Name: 'RateLimitPerIp', Action: { Block: {} } }),
+        Match.objectLike({ Name: 'AWSManagedRulesCommonRuleSet' }),
+        Match.objectLike({ Name: 'AWSManagedRulesKnownBadInputsRuleSet' }),
+      ]),
+    });
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({ WebACLId: Match.anyValue(), CacheBehaviors: [Match.objectLike({ PathPattern: '/api/*' })] }),
+    });
+    minimal.resourceCountIs('AWS::WAFv2::WebACL', 0);
+  });
+
   it('CloudFront enforces HTTPS, security headers and private origin access', () => {
     template.hasResourceProperties('AWS::CloudFront::Distribution', { DistributionConfig: Match.objectLike({ DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }) }) });
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', { ResponseHeadersPolicyConfig: Match.objectLike({ SecurityHeadersConfig: Match.objectLike({ FrameOptions: { FrameOption: 'DENY', Override: true } }) }) });

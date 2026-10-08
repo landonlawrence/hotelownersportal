@@ -5,15 +5,17 @@ import { supabase, unwrap } from '../lib/supabase';
 import { apiJson } from '../lib/api';
 import { useDisplayNames, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
+import { AdminProperties } from './AdminProperties';
 import { Card, Empty, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate } from '../components/ui';
 
-type Tab = 'users' | 'invitations' | 'branding' | 'audit' | 'support' | 'platform';
+type Tab = 'users' | 'invitations' | 'properties' | 'branding' | 'audit' | 'support' | 'platform';
 
 export function AdminPage() {
   const { can, ctx } = usePortal();
   const tabs: Array<{ id: Tab; label: string; show: boolean }> = [
     { id: 'users', label: 'Users & access', show: can('admin.users') },
     { id: 'invitations', label: 'Invitations', show: can('admin.users') },
+    { id: 'properties', label: 'Properties', show: can('admin.company') },
     { id: 'branding', label: 'Branding', show: can('admin.company') },
     { id: 'audit', label: 'Audit log', show: can('audit.view') },
     { id: 'support', label: 'Support access', show: can('admin.users') },
@@ -29,6 +31,7 @@ export function AdminPage() {
       <div className="tabs" role="tablist">{visible.map((t) => <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</button>)}</div>
       {tab === 'users' && <Users />}
       {tab === 'invitations' && <Invitations />}
+      {tab === 'properties' && <AdminProperties />}
       {tab === 'branding' && <Branding />}
       {tab === 'audit' && <Audit />}
       {tab === 'support' && <Support />}

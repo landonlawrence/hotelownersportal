@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from '../lib/supabase';
-import { buildStatement } from '../lib/statement';
+import { buildStatement } from '@hop/core';
 import { useAccounts, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';

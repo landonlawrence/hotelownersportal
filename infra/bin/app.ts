@@ -28,6 +28,7 @@ new PortalStack(app, `HotelOwnersPortal-${envName}`, {
   notificationFromAddress: str('notificationFromAddress'),
   enableMalwareScanning: cfg.enableMalwareScanning === true,
   alarmEmail: str('alarmEmail'),
+  enableWaf: cfg.enableWaf === true,
   lambdaAssetDir: resolve(process.cwd(), '../services/api/dist/lambda'),
   tags: { app: 'hotel-owners-portal', environment: envName },
 });

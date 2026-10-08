@@ -1,6 +1,6 @@
 # Project Status
 
-_Last updated: 2026-10-07. Keep this file current so another session can resume without repeating work._
+_Last updated: 2026-10-08. Keep this file current so another session can resume without repeating work._
 
 ## Summary
 
@@ -17,20 +17,29 @@ All six milestones are implemented and verified **locally**. No cloud deployment
 | M5 Automation — email ingestion, parser adapters, queue/retries/DLQ, review tools, missing-report alerts | ✅ Done (local); SES/SQS/GuardDuty defined in CDK | `imports.test.ts` (email routing, retries, revocation at processing time, alerts), CDK assertions |
 | M6 Release readiness — security verification, backup/restore, observability, staging pipeline, pilot checks, prod docs | ✅ Documented and automated; ⛔ staging deploy blocked on credentials | `docs/SECURITY.md`, `docs/OPERATIONS.md`, `docs/DEPLOYMENT.md`, `docs/PILOT_ACCEPTANCE.md`, `.github/workflows/*` |
 
-## Test evidence (last full run, 2026-10-07)
+## Test evidence (last full run, 2026-10-08)
 
 | Suite | Command | Result |
 |---|---|---|
 | Lint | `npm run lint` | clean |
 | Typecheck (all workspaces) | `npm run typecheck` | clean |
-| Core unit | `npm run test -w packages/core` | 56 passed |
-| CDK assertions | `npm run test -w infra` | 12 passed |
+| Core unit | `npm run test -w packages/core` | 57 passed |
+| CDK assertions | `npm run test -w infra` | 13 passed |
 | CDK synth | `npx cdk synth -c env=staging` / `production` | succeeds |
-| Integration (local Supabase, fresh reset) | `npm run test:integration` | 70 passed (7 files) |
-| End-to-end (Playwright) | `npm run test:e2e` | 8 passed |
+| Integration (local Supabase, fresh reset) | `npm run test:integration` | 79 passed (8 files) |
+| End-to-end (Playwright) | `npm run test:e2e` | 11 passed |
 | Web production build | `npm run build -w apps/web` | succeeds; route-level code splitting (initial chunk 376 kB) |
 
 Required verification coverage: cross-company/cross-property denial ✔, direct API and document access ✔, revoked permissions (DB + background job) ✔, draft visibility ✔, portfolio KPI weighting ✔, missing data/zero denominators ✔, budget/variance ✔, duplicate and revised imports ✔, invalid property mappings ✔, publication/revision history ✔, CapEx permissions/thresholds ✔, branding and company switching ✔, security acceptance (UI, API, export, document URL) ✔.
+
+## Round 2 (2026-10-08) — added
+
+- Server-rendered branded PDFs: financial statements (`/exports/financial-reports/:id.pdf`) and owner packages (`/exports/packages/:id.pdf`), authorized as the user, watermarked when unpublished, audited.
+- Notification email preferences (per event type; in-app always kept).
+- Ingestion management UI: create sources, pause/resume, revision policy, email route with inbound address, allowed senders, SPF/DKIM requirement, token rotation, property code mappings.
+- Property administration: create properties (`create_property` RPC), edit details/status, room-inventory changes with history (`set_room_inventory`), KPI conventions (OOO/comp) and report deadlines.
+- Optional WAF (production default) with the API routed through CloudFront `/api/*`.
+- `scripts/dev-up.sh` one-command local stack; mobile top-bar fix; statement builder moved to `@hop/core`.
 
 ## Defects found and fixed during verification
 
@@ -41,6 +50,10 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 - Dashboard crashed when switching company (stale placeholder data) → placeholders scoped to company + property set.
 - Partial-period revenue totals were compared against full prior-year periods (misleading −60% deltas) → comparisons hidden with an explanation when coverage is incomplete.
 - Member list served stale after invitation acceptance → refetch on mount.
+- (Round 2) Creating a property via INSERT … RETURNING failed under RLS → `create_property` RPC.
+- (Round 2) New onboarding properties made the whole portfolio look "partial" → onboarding/archived properties only count toward coverage when they report.
+- (Round 2) Row audits would have copied email-route tokens into audit metadata → secret columns redacted.
+- (Round 2) After accepting an invitation the app could show a stale "no access" screen → context refetched before entering; "Check again" button added.
 
 ## Blocked (needs owner action)
 
@@ -57,18 +70,15 @@ See `docs/DECISIONS.md` (single currency per company, calendar fiscal year defau
 ## Next tasks (suggested order)
 
 1. Provision staging (Supabase project + AWS account), run the Deploy workflow, execute `docs/PILOT_ACCEPTANCE.md`.
-3. Server-rendered branded PDF exports for statements and owner packages (currently browser print view + CSV).
-4. Notification preferences UI (table and API already exist).
-5. Ingestion source/route management UI (currently seeded/SQL; read-only list in UI).
-5. Property and room-inventory management UI for company admins (policies exist; UI is read-only).
-6. WAF for CloudFront/API in production; log drains from Supabase to CloudWatch.
-7. PMS parser adapters once real sample files are supplied (fixtures + tests first).
+2. Log drains from Supabase to CloudWatch (or a SIEM) for a single audit/observability pane.
+3. Scheduled delivery of owner-package PDFs to a secure download link (never as attachments).
+4. Company-level chart-of-accounts editor and budget templates in the UI (policies exist; currently seeded).
+5. PMS / accounting parser adapters once real sample files are supplied (fixtures + tests first); Travera adapter once API access is granted.
 
 ## How to resume
 
 ```bash
 npm install
-SUPABASE_INTERNAL_IMAGE_REGISTRY=docker.io npm run db:start   # registry var only if public.ecr.aws is blocked
-npm run db:reset
+bash scripts/dev-up.sh
 npm run test:integration && npm run test:e2e
 ```
