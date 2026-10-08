@@ -64,7 +64,7 @@ Acceptance criteria:
 - [x] SES inbound email → S3 → route validation → import run → SQS → worker (retries + DLQ).
 - [x] Parser adapter registry (standardized CSV/XLSX only; PMS parsers only from real samples).
 - [x] Import review tools, retry controls, missing-report alerts (scheduled).
-- [x] Integration interfaces for PMS / accounting / Travera (no invented endpoints).
+- [x] Integration interfaces for PMS / accounting (no invented endpoints). Travera integration removed from scope (2026-10-08).
 
 ### M6 — Release readiness
 - [x] Security verification checklist + automated security suite.

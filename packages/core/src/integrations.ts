@@ -1,5 +1,5 @@
 /**
- * Integration interfaces for future PMS, accounting and Travera connections.
+ * Integration interfaces for future PMS and accounting-system connections.
  *
  * Nothing here assumes an external API exists or that access has been granted.
  * Concrete adapters must be implemented against vendor documentation and real
@@ -11,7 +11,7 @@ import type { DailyPerformanceImportRecord } from './ingestion/dailyPerformance.
 import type { MonthlyActualImportRecord } from './ingestion/monthlyActuals.js';
 import type { ValidationIssue } from './ingestion/types.js';
 
-export type IntegrationKind = 'pms' | 'accounting' | 'travera';
+export type IntegrationKind = 'pms' | 'accounting';
 
 export interface IntegrationConnectionConfig {
   connectionId: string;
@@ -51,31 +51,19 @@ export interface AccountingAdapter {
   pullMonthlyActuals(cfg: IntegrationConnectionConfig, periodMonth: string): Promise<PullResult<Omit<MonthlyActualImportRecord, 'sourceRow' | 'accountId'>>>;
 }
 
-/**
- * Travera is a future upstream data source. The portal is standalone and must
- * keep working when Travera is unavailable, so the adapter is optional and
- * pull-based; no endpoints are assumed.
- */
-export interface TraveraAdapter {
-  readonly provider: 'travera';
-  testConnection(cfg: IntegrationConnectionConfig): Promise<{ ok: boolean; message: string }>;
-  pullDailyPerformance?(cfg: IntegrationConnectionConfig, window: PullWindow): Promise<PullResult<Omit<DailyPerformanceImportRecord, 'sourceRow'>>>;
-  pullMonthlyActuals?(cfg: IntegrationConnectionConfig, periodMonth: string): Promise<PullResult<Omit<MonthlyActualImportRecord, 'sourceRow' | 'accountId'>>>;
-}
-
 export class IntegrationNotConfiguredError extends Error {
   constructor(kind: IntegrationKind, provider: string) {
     super(`${kind} integration "${provider}" is not configured. No adapter has been implemented or authorised.`);
   }
 }
 
-const adapters = new Map<string, PmsAdapter | AccountingAdapter | TraveraAdapter>();
+const adapters = new Map<string, PmsAdapter | AccountingAdapter>();
 
-export function registerAdapter(kind: IntegrationKind, adapter: PmsAdapter | AccountingAdapter | TraveraAdapter): void {
+export function registerAdapter(kind: IntegrationKind, adapter: PmsAdapter | AccountingAdapter): void {
   adapters.set(`${kind}:${adapter.provider}`, adapter);
 }
 
-export function getAdapter(kind: IntegrationKind, provider: string): PmsAdapter | AccountingAdapter | TraveraAdapter {
+export function getAdapter(kind: IntegrationKind, provider: string): PmsAdapter | AccountingAdapter {
   const a = adapters.get(`${kind}:${provider}`);
   if (!a) throw new IntegrationNotConfiguredError(kind, provider);
   return a;

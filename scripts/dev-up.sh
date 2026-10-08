@@ -13,7 +13,12 @@ if ! docker info >/dev/null 2>&1; then
 fi
 # Docker Hub fallback for environments that cannot reach public.ecr.aws.
 export SUPABASE_INTERNAL_IMAGE_REGISTRY="${SUPABASE_INTERNAL_IMAGE_REGISTRY:-docker.io}"
-npx supabase start -x studio,imgproxy,realtime,storage-api,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit > .local-logs/supabase.log 2>&1 < /dev/null
+# Containers from a previous session may still be booting; retry until the stack is ready.
+for attempt in $(seq 1 30); do
+  if npx supabase start -x studio,imgproxy,realtime,storage-api,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit > "$LOGS/supabase.log" 2>&1 < /dev/null; then break; fi
+  [ "$attempt" = 30 ] && { echo "Supabase did not start; see $LOGS/supabase.log"; exit 1; }
+  sleep 5
+done
 bash scripts/local-env.sh > /dev/null 2>&1 < /dev/null
 if [ "${RESET:-1}" = "1" ]; then
   npx supabase db reset --local > .local-logs/db-reset.log 2>&1 < /dev/null

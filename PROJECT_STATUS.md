@@ -60,7 +60,7 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 1. **Cloud credentials & authorization:** AWS account + GitHub OIDC deploy role; separate Supabase projects for staging and production; GitHub environment variables/secrets listed in `docs/DEPLOYMENT.md`. Staging auto-deploy is disabled until `STAGING_ENABLED=true`.
 2. **Production release authorization** (manual dispatch + environment reviewers).
 2. **Domains:** inbound email domain (MX → SES), verified SES sending identity, ACM certificate and DNS for tenant custom domains.
-3. **Real PMS / accounting sample reports** before implementing vendor-specific parsers; **Travera** API documentation/access before implementing its adapter.
+3. **Real PMS / accounting sample reports** before implementing vendor-specific parsers. (Travera integration removed from scope by owner decision, 2026-10-08.)
 4. **Policy decisions to confirm with the business:** CapEx thresholds per company; whether owners should see confidential (loan/bank) documents by default (currently no); MFA requirement for owners approving CapEx (currently required when the company enforces MFA).
 
 ## Assumptions in effect
@@ -73,7 +73,7 @@ See `docs/DECISIONS.md` (single currency per company, calendar fiscal year defau
 2. Log drains from Supabase to CloudWatch (or a SIEM) for a single audit/observability pane.
 3. Scheduled delivery of owner-package PDFs to a secure download link (never as attachments).
 4. Company-level chart-of-accounts editor and budget templates in the UI (policies exist; currently seeded).
-5. PMS / accounting parser adapters once real sample files are supplied (fixtures + tests first); Travera adapter once API access is granted.
+5. PMS / accounting parser adapters once real sample files are supplied (fixtures + tests first).
 
 ## How to resume
 

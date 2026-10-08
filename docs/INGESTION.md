@@ -43,8 +43,10 @@ Header names are case/space-insensitive (`Room Revenue` → `room_revenue`). Num
 ### `hop.budget.v1`
 `property_code, fiscal_year, account_code, jan … dec` — one fiscal year per file. `account_code` may be a reporting account code (e.g. `REV_ROOMS`, `ROOMS_SOLD`) or a mapped source code. Each import creates a new **draft** budget version; approval is a separate step.
 
-## PMS, accounting and Travera integrations
+## PMS and accounting integrations
 
-`packages/core/src/integrations.ts` defines `PmsAdapter`, `AccountingAdapter` and `TraveraAdapter` interfaces that emit the same record shapes as the standardized parsers, so every integration flows through identical validation, idempotency and lineage. **No vendor endpoints are implemented or assumed.** Connections are tracked in `integration_connections` (status `not_configured` in the demo). Credentials, when granted, belong in AWS Secrets Manager (`secret_ref`), never in the database or browser.
+`packages/core/src/integrations.ts` defines `PmsAdapter` and `AccountingAdapter` interfaces that emit the same record shapes as the standardized parsers, so every integration flows through identical validation, idempotency and lineage. **No vendor endpoints are implemented or assumed.** Connections are tracked in `integration_connections` (status `not_configured` in the demo). Credentials, when granted, belong in AWS Secrets Manager (`secret_ref`), never in the database or browser.
 
 PMS-specific report parsers (Opera, Mews, etc.) must be added only from real sample reports, with fixtures and tests; until then the registry exposes only the standardized formats. AI-assisted extraction, if introduced, must produce standardized records, pass the same validators, and route uncertain financial values to human review.
+
+The portal does not integrate with Travera (product decision, 2026-10-08).

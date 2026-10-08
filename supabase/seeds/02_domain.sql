@@ -443,7 +443,6 @@ insert into public.ingestion_property_mappings (company_id, source_id, external_
   ('10000000-0000-4000-8000-000000000001', '90000000-0000-4000-8000-000000000001', 'HNL01', '20000000-0000-4000-8000-000000000104');
 
 insert into public.integration_connections (company_id, kind, provider, status, settings) values
-  ('10000000-0000-4000-8000-000000000001', 'travera', 'travera', 'not_configured', '{"note":"Future upstream source; no API access granted yet."}'),
   ('10000000-0000-4000-8000-000000000001', 'pms', 'unspecified', 'not_configured', '{"note":"PMS vendor and API access to be confirmed."}'),
   ('10000000-0000-4000-8000-000000000002', 'accounting', 'unspecified', 'not_configured', '{}');
 

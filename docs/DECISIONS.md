@@ -121,6 +121,9 @@ CSV/XLSX formats are implemented. PMS-specific parsers will be added only from r
 Email senders are never trusted alone: an email must arrive at a route's secret inbound address,
 match an allowed sender, and every property code must map to a property of the route's company.
 
+## ADR-016 No Travera integration
+The original brief allowed for future Travera data. The owner decided (2026-10-08) not to link Travera. The integration kind, adapter interface and demo connection were removed; data enters only through standardized uploads, scheduled report emails, and (later) direct PMS/accounting adapters.
+
 ## Assumptions
 - Single currency per company (default USD); multi-currency is out of scope for v1.
 - Fiscal year = calendar year by default (configurable `fiscal_year_start_month` stored for later).
