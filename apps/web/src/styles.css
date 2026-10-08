@@ -192,10 +192,11 @@ table.data th.num, table.data td.num { text-align: right; }
 .avatar { width: 28px; height: 28px; border-radius: 999px; background: var(--brand-accent); color: var(--brand-on-accent); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; }
 
 @media (max-width: 640px) {
-  .topbar { gap: 8px; flex-wrap: wrap; }
+  .topbar { gap: 8px; flex-wrap: nowrap; padding: 10px 12px; }
   .topbar .user-chip span:not(.avatar) { display: none; }
   .company-switcher > span { display: none; }
-  .company-switcher select { max-width: 52vw; }
+  .company-switcher select { max-width: 42vw; }
+  .topbar .btn-sm { padding: 3px 6px; }
   .page-header h1 { font-size: 20px; }
   .auth-hero .logo img { max-width: 70vw; }
 }
