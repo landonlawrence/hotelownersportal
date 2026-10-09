@@ -1,0 +1,61 @@
+name: Supabase migrations
+
+# Applies database migrations to ONE environment's Supabase project without
+# touching AWS. Manual only. Never loads the demo seed.
+# Production runs require approval through the GitHub "production" environment.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+        default: staging
+      dry_run:
+        description: Only list pending migrations, apply nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency: supabase-${{ inputs.environment }}
+    env:
+      TARGET: ${{ inputs.environment }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify environment configuration
+        run: |
+          for v in SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD; do
+            if [ -z "${!v}" ]; then echo "::error::$v is not configured for $TARGET"; exit 1; fi
+          done
+          if [ "$SUPABASE_URL" != "https://$SUPABASE_PROJECT_REF.supabase.co" ]; then
+            echo "::error::SUPABASE_URL does not match SUPABASE_PROJECT_REF"; exit 1
+          fi
+
+      - uses: supabase/setup-cli@v1
+        with: { version: 2.120.0 }
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Pending migrations
+        run: supabase db push --dry-run --include-all
+
+      - name: Apply migrations
+        if: ${{ !inputs.dry_run }}
+        run: supabase db push --include-all
+
+      - name: Verify anonymous key cannot read data
+        run: bash scripts/verify-anon-lockdown.sh

@@ -45,6 +45,16 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
 7. **Custom domains** — issue an ACM certificate in `us-east-1` covering the portal domains; add `appDomainNames` + `certificateArn`; point DNS (CNAME/ALIAS) at the CloudFront distribution; insert/verify rows in `company_domains` (platform admin) after confirming the DNS TXT token.
 8. **Bootstrap the first platform admin** (SQL editor, once): `insert into public.platform_admins (user_id) values ('<auth user id>');` then provision companies from the Platform tab.
 
+## Database only (before AWS exists)
+
+The **Supabase migrations** workflow (`.github/workflows/supabase-migrate.yml`, manual dispatch) applies migrations to one environment's Supabase project without touching AWS. It needs only `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` (variables) and `SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD` (secrets) on the GitHub environment.
+
+1. Run it with `dry_run` ticked (the default): it links the project and lists pending migrations.
+2. Run it again with `dry_run` unticked to apply them.
+3. Both runs finish with `scripts/verify-anon-lockdown.sh`, which fails if the anonymous key can read any row from any table.
+
+It never loads the demo seed. Production runs wait for the `production` environment's reviewers.
+
 ## WAF and API routing
 
 With `enableWaf: true` (default in the production context) the stack creates a CloudFront-scoped web ACL (per-IP rate limit, AWS IP reputation list, common rule set, known bad inputs) and serves the API through CloudFront at `/api/*`, because API Gateway HTTP APIs cannot attach WAF directly. The deploy workflow then builds the SPA with `VITE_API_URL=https://<portal domain>/api` (stack output `ProtectedApiUrl`). The stack must be in `us-east-1` for CloudFront-scoped WAF.
