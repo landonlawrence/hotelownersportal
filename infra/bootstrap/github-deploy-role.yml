@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Lets GitHub Actions in one repository deploy the Hotel Owners Portal with
+  short-lived OIDC credentials (no long-lived AWS keys in GitHub). Deploy once
+  per environment, after `cdk bootstrap`.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: landonlawrence/hotelownersportal
+    Description: owner/repo allowed to assume the role
+  Environment:
+    Type: String
+    AllowedValues: [staging, production]
+    Default: staging
+    Description: The GitHub environment allowed to use this role (deploy this stack once per environment)
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Set to false if this account already has the token.actions.githubusercontent.com identity provider
+
+Conditions:
+  MakeProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub hop-github-deploy-${Environment}
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - MakeProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${Environment}
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CDK does the real work through the roles created by `cdk bootstrap`.
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-*
+              # Read stack outputs (web bucket, distribution, URLs).
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/HotelOwnersPortal-*/*
+              # Publish the web app and refresh the CDN.
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::hotelownersportal-*-webapp*
+                  - !Sub arn:${AWS::Partition}:s3:::hotelownersportal-*-webapp*/*
+              - Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
+
+Outputs:
+  DeployRoleArn:
+    Description: Put this in the GitHub environment variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn

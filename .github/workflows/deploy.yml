@@ -45,7 +45,7 @@ jobs:
 
       - name: Verify environment configuration
         run: |
-          for v in AWS_DEPLOY_ROLE_ARN AWS_REGION SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_ANON_KEY CDK_CONTEXT_JSON; do
+          for v in AWS_DEPLOY_ROLE_ARN AWS_REGION SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_ANON_KEY; do
             if [ -z "${!v}" ]; then echo "::error::$v is not configured for $TARGET"; exit 1; fi
           done
         env:
@@ -54,7 +54,6 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
-          CDK_CONTEXT_JSON: ${{ vars.CDK_CONTEXT_JSON }}
 
       # 1. Database migrations (never the demo seed) against THIS environment's Supabase project.
       - uses: supabase/setup-cli@v1
@@ -76,8 +75,28 @@ jobs:
       - name: CDK deploy
         working-directory: infra
         run: |
-          HOP_CDK_CONFIG="$CDK_CONTEXT_JSON" npx cdk deploy "HotelOwnersPortal-$TARGET" -c env=$TARGET --require-approval never --outputs-file outputs.json
+          STACK="HotelOwnersPortal-$TARGET"
+          # Optional extra settings (domains, alarms, WAF, scanning) come from CDK_CONTEXT_JSON;
+          # Supabase values and region always come from the environment variables.
+          CTX=${CDK_CONTEXT_JSON:-'{}'}
+          CFG=$(jq -c --arg url "$SUPABASE_URL" --arg key "$SUPABASE_ANON_KEY" --arg region "$AWS_REGION" \
+            '. + {supabaseUrl: $url, supabaseAnonKey: $key, region: $region}' <<<"$CTX")
+          # Without a custom domain the portal is served from its CloudFront domain: allow that
+          # origin for the API and document uploads. The first deploy creates it, then applies it.
+          with_origin() { jq -c --arg o "https://$1" '.allowedOrigins = (((.allowedOrigins // []) + [$o]) | unique)' <<<"$CFG"; }
+          deploy() { HOP_CDK_CONFIG="$1" npx cdk deploy "$STACK" -c env=$TARGET --require-approval never --outputs-file outputs.json; }
+          CF=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='DistributionDomain'].OutputValue" --output text 2>/dev/null || true)
+          if [ -n "$CF" ] && [ "$CF" != "None" ]; then
+            deploy "$(with_origin "$CF")"
+          else
+            deploy "$CFG"
+            deploy "$(with_origin "$(jq -r ".\"$STACK\".DistributionDomain" outputs.json)")"
+          fi
         env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
           CDK_CONTEXT_JSON: ${{ vars.CDK_CONTEXT_JSON }}
 
       # 3. Web app.
@@ -100,3 +119,4 @@ jobs:
         run: |
           STACK="HotelOwnersPortal-$TARGET"
           curl -fsS "$(jq -r ".\"$STACK\".ApiUrl" infra/outputs.json)/health"
+          echo "Portal: https://$(jq -r ".\"$STACK\".DistributionDomain" infra/outputs.json)" | tee -a "$GITHUB_STEP_SUMMARY"

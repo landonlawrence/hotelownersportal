@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import type { AppEnv } from '../context.js';
 import { badRequest, fromPostgrest } from '../errors.js';
-import { requireUser } from '../middleware.js';
+import { isAllowedOrigin, requireUser } from '../middleware.js';
 import { serviceClient } from '../supabase.js';
 
 export const admin = new Hono<AppEnv>();
@@ -45,7 +45,10 @@ admin.post('/invitations', async (c) => {
     .maybeSingle();
   const { data: brand } = await svc.from('company_branding').select('portal_name').eq('company_id', b.company_id).single();
   const host = (domain as { hostname: string } | null)?.hostname;
-  const base = host ? `${host.includes('localhost') ? 'http' : 'https'}://${host}` : cfg.PUBLIC_APP_URL;
+  // Without a verified tenant domain, link back to the portal the admin is using (an allowed origin only).
+  const origin = c.req.header('origin');
+  const fallback = origin && (await isAllowedOrigin(origin)) ? origin : cfg.PUBLIC_APP_URL;
+  const base = host ? `${host.includes('localhost') ? 'http' : 'https'}://${host}` : fallback;
   const inviteUrl = `${base}/accept-invite#token=${token}`;
   const portal = (brand as { portal_name: string }).portal_name;
   await svc.from('notification_outbox').insert({
@@ -54,6 +57,7 @@ admin.post('/invitations', async (c) => {
     subject: `You're invited to ${portal}`,
     body_text: `You have been invited to ${portal}.\n\nAccept your invitation (expires in ${b.expires_in_days} days):\n${inviteUrl}\n\nIf you did not expect this invitation, you can ignore this email.`,
   });
-  const exposeLink = cfg.APP_ENV === 'local' || cfg.APP_ENV === 'test';
+  // When no email sender is configured the admin must deliver the link themselves.
+  const exposeLink = cfg.APP_ENV === 'local' || cfg.APP_ENV === 'test' || cfg.EMAIL_DRIVER === 'log';
   return c.json({ invitation_id, ...(exposeLink ? { invite_url: inviteUrl } : {}) }, 201);
 });

@@ -18,22 +18,27 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
    - Auth → enable TOTP MFA; disable public sign-ups (users join via invitation); set Site URL to the primary portal domain and add each tenant domain to redirect URLs; configure SMTP for auth emails.
    - Use asymmetric JWT signing keys (default for new projects). The API verifies via `/auth/v1/.well-known/jwks.json`.
    - Note: project ref, URL, publishable key, service-role key.
-2. **AWS account** — bootstrap CDK: `npx cdk bootstrap aws://<account>/us-east-1`.
-3. **GitHub OIDC deploy role** — IAM role trusted for `token.actions.githubusercontent.com` restricted to this repo and the `staging`/`production` environments, with permission to assume the CDK bootstrap roles.
+2. **AWS account** — bootstrap CDK once per account/region (AWS CloudShell works): `npx -y aws-cdk@2.1018.0 bootstrap aws://<account>/us-east-1`.
+3. **GitHub OIDC deploy role** — deploy `infra/bootstrap/github-deploy-role.yml` once per environment. It creates the GitHub identity provider (set `CreateOidcProvider=false` if the account already has one) and a role `hop-github-deploy-<env>` that only this repo's `<env>` GitHub environment can assume. The role can assume the CDK bootstrap roles, read the stack outputs, publish the web bucket and invalidate CloudFront; nothing else.
+   ```bash
+   aws cloudformation deploy --stack-name hop-github-deploy-staging --template-file github-deploy-role.yml \
+     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides Environment=staging
+   aws cloudformation describe-stacks --stack-name hop-github-deploy-staging --query "Stacks[0].Outputs" --output table
+   ```
 4. **GitHub environments** `staging` and `production` (production with required reviewers). Variables / secrets:
 
 | Name | Type | Example |
 |---|---|---|
-| `AWS_DEPLOY_ROLE_ARN` | var | `arn:aws:iam::123456789012:role/hop-github-deploy` |
+| `AWS_DEPLOY_ROLE_ARN` | var | `arn:aws:iam::123456789012:role/hop-github-deploy-staging` |
 | `AWS_REGION` | var | `us-east-1` |
 | `SUPABASE_PROJECT_REF` | var | `abcd1234` |
 | `SUPABASE_URL` | var | `https://abcd1234.supabase.co` |
 | `SUPABASE_ANON_KEY` | var | publishable key (browser-safe) |
-| `CDK_CONTEXT_JSON` | var | `{"account":"123456789012","supabaseUrl":"…","supabaseAnonKey":"…","allowedOrigins":["https://owners.example.com"],"appDomainNames":["owners.example.com"],"certificateArn":"arn:aws:acm:us-east-1:…","inboundEmailDomain":"inbound.example.com","notificationFromAddress":"no-reply@example.com","enableMalwareScanning":true,"enableWaf":true,"alarmEmail":"ops@example.com"}` |
+| `CDK_CONTEXT_JSON` | var, optional | extra stack settings; Supabase URL/key and region are filled in from the variables above. Example: `{"allowedOrigins":["https://owners.example.com"],"appDomainNames":["owners.example.com"],"certificateArn":"arn:aws:acm:us-east-1:…","inboundEmailDomain":"inbound.example.com","notificationFromAddress":"no-reply@example.com","enableMalwareScanning":true,"enableWaf":true,"alarmEmail":"ops@example.com"}` |
 | `SUPABASE_ACCESS_TOKEN` | secret | Supabase personal access token (deploy only) |
 | `STAGING_ENABLED` | repo var | `true` to enable automatic staging deploys |
 
-5. **First deploy**, then set the service-role key **out of band** (never in GitHub or the browser):
+5. **First deploy** (Actions → Deploy → Run workflow). Without a custom domain the portal is served at its CloudFront domain (`https://dxxxx.cloudfront.net`, shown in the run summary); the workflow adds that origin to `allowedOrigins` automatically (the first run deploys twice for this). Until SES is configured, invitation links are shown to the inviting admin instead of emailed. Then set the service-role key **out of band** (never in GitHub or the browser):
    ```bash
    aws secretsmanager put-secret-value --secret-id hop/<env>/supabase-service-role-key --secret-string '<service-role key>'
    ```
