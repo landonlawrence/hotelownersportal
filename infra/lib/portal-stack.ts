@@ -75,7 +75,7 @@ export class PortalStack extends Stack {
     const key = new kms.Key(this, 'DataKey', {
       alias: `alias/hop-${props.envName}-data`,
       enableKeyRotation: true,
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: retain,
       description: 'Encrypts documents, source files, inbound email and queues',
     });
     key.addToResourcePolicy(
@@ -92,7 +92,7 @@ export class PortalStack extends Stack {
       secretName: `hop/${props.envName}/supabase-service-role-key`,
       description: `Supabase service-role key for the ${props.envName} project (server-side only)`,
       encryptionKey: key,
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: retain,
     });
 
     // ---------------------------------------------------------------- storage
@@ -128,14 +128,10 @@ export class PortalStack extends Stack {
         { id: 'quarantine-expiry', prefix: 'quarantine/', expiration: Duration.days(30) },
         { id: 'noncurrent', noncurrentVersionExpiration: Duration.days(prod ? 2555 : 30) },
       ],
-      cors: [
-        {
-          allowedMethods: [s3.HttpMethods.POST],
-          allowedOrigins: props.allowedOrigins,
-          allowedHeaders: ['*'],
-          maxAge: 600,
-        },
-      ],
+      // S3 rejects a CORS rule without origins; the first deploy of a domainless stack has none yet.
+      cors: props.allowedOrigins.length
+        ? [{ allowedMethods: [s3.HttpMethods.POST], allowedOrigins: props.allowedOrigins, allowedHeaders: ['*'], maxAge: 600 }]
+        : undefined,
     });
     const sourceFilesBucket = privateBucket('SourceFiles', {
       lifecycleRules: [{ id: 'archive', transitions: [{ storageClass: s3.StorageClass.GLACIER_INSTANT_RETRIEVAL, transitionAfter: Duration.days(180) }] }],

@@ -30,6 +30,21 @@ beforeAll(() => {
   minimal = Template.fromStack(new PortalStack(new App(), 'Min', { ...base, envName: 'staging', enableMalwareScanning: false }));
 });
 
+describe('first deploy without a domain', () => {
+  it('synthesizes valid document-bucket CORS when no origins are known yet', () => {
+    const bare = Template.fromStack(new PortalStack(new App(), 'Bare', {
+      env: { account: '111111111111', region: 'us-east-1' }, envName: 'staging', supabaseUrl: 'https://x.supabase.co',
+      supabaseAnonKey: 'sb_publishable_test', allowedOrigins: [], lambdaAssetDir: assets(), enableMalwareScanning: false,
+    }));
+    for (const b of Object.values(bare.findResources('AWS::S3::Bucket'))) {
+      for (const rule of b.Properties.CorsConfiguration?.CorsRules ?? []) expect(rule.AllowedOrigins.length).toBeGreaterThan(0);
+    }
+    // Staging cleans up after itself; production keeps the key and secret.
+    bare.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete' });
+    template.hasResource('AWS::SecretsManager::Secret', { DeletionPolicy: 'Retain' });
+  });
+});
+
 describe('storage security', () => {
   it('every bucket blocks public access and enforces TLS', () => {
     const buckets = template.findResources('AWS::S3::Bucket');
