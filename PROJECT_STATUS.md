@@ -41,6 +41,12 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 - Optional WAF (production default) with the API routed through CloudFront `/api/*`.
 - `scripts/dev-up.sh` one-command local stack; mobile top-bar fix; statement builder moved to `@hop/core`.
 
+## Staging database (2026-10-12)
+
+- Supabase staging project `dvkqwkvnvvwltezvyqgq` (us-east-1, Free plan) created by the owner. GitHub environment `staging` holds `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` (publishable key) and the `SUPABASE_ACCESS_TOKEN` secret.
+- All 8 migrations applied by the **Supabase migrations** workflow (run #3). The anonymous-key lockdown check passed on 57 tables.
+- No seed, no users, no companies yet. AWS (API, documents, email ingestion) is not provisioned, so the portal is not usable end to end.
+
 ## Defects found and fixed during verification
 
 - Default privileges granted new tables to `anon` → default privileges revoked globally; test asserts no `anon` grants and RLS on every table.
@@ -69,7 +75,7 @@ See `docs/DECISIONS.md` (single currency per company, calendar fiscal year defau
 
 ## Next tasks (suggested order)
 
-1. Provision staging (Supabase project + AWS account), run the Deploy workflow, execute `docs/PILOT_ACCEPTANCE.md`.
+1. Staging Supabase is migrated. Remaining: bootstrap the first platform admin and company, provision AWS, run the Deploy workflow, execute `docs/PILOT_ACCEPTANCE.md`.
 2. Log drains from Supabase to CloudWatch (or a SIEM) for a single audit/observability pane.
 3. Scheduled delivery of owner-package PDFs to a secure download link (never as attachments).
 4. Company-level chart-of-accounts editor and budget templates in the UI (policies exist; currently seeded).
