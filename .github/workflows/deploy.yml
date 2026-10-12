@@ -67,6 +67,12 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       # 2. AWS infrastructure and Lambda code.
+      # Prints the identity GitHub presents to AWS (not secret); the deploy role trusts its "sub".
+      - name: Show OIDC identity
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          PAYLOAD=$(cut -d. -f2 <<<"$TOKEN" | tr '_-' '/+'); while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do PAYLOAD="$PAYLOAD="; done
+          base64 -d <<<"$PAYLOAD" | jq '{sub, aud, repository, environment, ref}'
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
