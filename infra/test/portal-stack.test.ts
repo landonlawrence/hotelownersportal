@@ -39,6 +39,9 @@ describe('first deploy without a domain', () => {
     for (const b of Object.values(bare.findResources('AWS::S3::Bucket'))) {
       for (const rule of b.Properties.CorsConfiguration?.CorsRules ?? []) expect(rule.AllowedOrigins.length).toBeGreaterThan(0);
     }
+    // No reserved concurrency (fails on new accounts); the queue caps worker parallelism instead.
+    for (const f of Object.values(bare.findResources('AWS::Lambda::Function'))) expect(f.Properties.ReservedConcurrentExecutions).toBeUndefined();
+    bare.hasResourceProperties('AWS::Lambda::EventSourceMapping', { ScalingConfig: { MaximumConcurrency: 2 } });
     // Staging cleans up after itself; production keeps the key and secret.
     bare.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete' });
     template.hasResource('AWS::SecretsManager::Secret', { DeletionPolicy: 'Retain' });

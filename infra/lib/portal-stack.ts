@@ -215,11 +215,13 @@ export class PortalStack extends Stack {
     sourceFilesBucket.grantPut(apiFn); // manual import intake
     importQueue.grantSendMessages(apiFn);
 
-    const workerFn = fn('worker', { timeout: workerTimeout, memorySize: 1536, reservedConcurrentExecutions: prod ? 10 : 2 });
+    const workerFn = fn('worker', { timeout: workerTimeout, memorySize: 1536 });
     sourceFilesBucket.grantRead(workerFn);
     documentsBucket.grantReadWrite(workerFn);
     documentsBucket.grantDelete(workerFn);
-    workerFn.addEventSource(new eventSources.SqsEventSource(importQueue, { batchSize: 5, reportBatchItemFailures: true }));
+    // Cap import parallelism at the queue, not with reserved concurrency: new AWS accounts have a
+    // 10-execution limit and reject any reservation that leaves fewer than 10 unreserved.
+    workerFn.addEventSource(new eventSources.SqsEventSource(importQueue, { batchSize: 5, reportBatchItemFailures: true, maxConcurrency: prod ? 10 : 2 }));
 
     const schedulerFn = fn('scheduler', { timeout: Duration.minutes(5) });
     if (props.notificationFromAddress) {
