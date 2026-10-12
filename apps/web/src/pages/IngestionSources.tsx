@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listParsers } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
+import { fetchMeta } from '../lib/api';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, Loading, Modal, Notice, StatusBadge, errorMessage } from '../components/ui';
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787';
 const TYPE_LABEL: Record<string, string> = { daily_performance: 'Daily performance', monthly_actuals: 'Monthly actuals', budget: 'Budget' };
 
 interface Source {
@@ -92,7 +92,7 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
   const { properties } = usePortal();
   const qc = useQueryClient();
   const [err, setErr] = useState<string | null>(null);
-  const meta = useQuery({ queryKey: ['api-meta'], staleTime: Infinity, queryFn: async () => (await fetch(`${API}/meta`)).json() as Promise<{ inboundEmailDomain: string }> });
+  const meta = useQuery({ queryKey: ['api-meta'], staleTime: 60_000, queryFn: fetchMeta });
   const route = useQuery({
     queryKey: ['route', source.id],
     queryFn: async () => unwrap(await supabase.from('ingestion_source_routes').select('inbound_token, allowed_senders, require_spf_dkim_pass').eq('source_id', source.id).maybeSingle()) as { inbound_token: string; allowed_senders: string[]; require_spf_dkim_pass: boolean } | null,

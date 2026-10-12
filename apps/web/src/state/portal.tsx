@@ -59,6 +59,10 @@ interface PortalState {
   perms: PermissionSet;
   can: (perm: Permission, propertyId?: string) => boolean;
   canAny: (perm: Permission) => boolean;
+  /** The permission is the user's but needs a 2FA-verified session first. */
+  mfaLocked: (perm: Permission) => boolean;
+  /** Can administer the company now, or could after verifying with 2FA. */
+  isCompanyAdmin: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -162,6 +166,8 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     perms,
     can: (perm, propertyId) => perms.has(perm, propertyId),
     canAny: (perm) => perms.any(perm) || (/^(admin|audit|ingestion)\./.test(perm) && perms.has(perm)),
+    mfaLocked: (perm) => !!company?.mfa_blocked_permissions.includes(perm),
+    isCompanyAdmin: ['admin.company', 'admin.users'].some((p) => company?.company_permissions.includes(p) || company?.mfa_blocked_permissions.includes(p)),
     refresh: async () => {
       await qc.invalidateQueries();
     },

@@ -3,11 +3,12 @@ import { Navigate, Outlet, RouterProvider, createBrowserRouter, useLocation, Lin
 import { supabase } from './lib/supabase';
 import { usePortal } from './state/portal';
 import { Layout } from './components/Layout';
+import { RequireProperties } from './components/NoProperties';
 import { Card, Empty, Loading, PageHeader } from './components/ui';
 import { LoginPage } from './pages/Login';
 import { AcceptInvitePage } from './pages/AcceptInvite';
 
-const OverviewPage = lazy(() => import('./pages/Overview').then((m) => ({ default: m.OverviewPage })));
+const HomePage = lazy(() => import('./pages/Home').then((m) => ({ default: m.HomePage })));
 const PropertiesPage = lazy(() => import('./pages/Properties').then((m) => ({ default: m.PropertiesPage })));
 const PropertyDetailPage = lazy(() => import('./pages/Properties').then((m) => ({ default: m.PropertyDetailPage })));
 const PerformancePage = lazy(() => import('./pages/Performance').then((m) => ({ default: m.PerformancePage })));
@@ -36,12 +37,7 @@ function RequireAuth() {
     return (
       <div className="content">
         {ctx.is_platform_admin ? (
-          <>
-            <PageHeader title="Platform administration" subtitle="You have no company memberships. Open an audited support session to view a company." actions={<button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>} />
-            <Suspense fallback={<Loading />}>
-              <Platform />
-            </Suspense>
-          </>
+          <PlatformShell email={ctx.email} />
         ) : (
           <Card>
             <Empty title="No active access">
@@ -63,8 +59,29 @@ function RequireAuth() {
   );
 }
 
+/** Platform administrators without a company membership: provisioning, support sessions and their own 2FA. */
+function PlatformShell({ email }: { email: string }) {
+  const location = useLocation();
+  const onSecurity = location.pathname.startsWith('/security');
+  return (
+    <>
+      <PageHeader
+        title="Platform administration"
+        subtitle={`Signed in as ${email}. You see company data only through an audited support session.`}
+        actions={
+          <>
+            <Link className="btn" to={onSecurity ? '/' : '/security'}>{onSecurity ? 'Companies' : 'Account security'}</Link>
+            <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+          </>
+        }
+      />
+      <Suspense fallback={<Loading />}>{onSecurity ? <SecurityPage /> : <Platform />}</Suspense>
+    </>
+  );
+}
+
 function NotFound() {
-  return <Empty title="Page not found"><Link to="/">Go to overview</Link></Empty>;
+  return <Empty title="Page not found"><Link to="/">Go to the home page</Link></Empty>;
 }
 
 const router = createBrowserRouter([
@@ -76,18 +93,23 @@ const router = createBrowserRouter([
       {
         element: <Layout />,
         children: [
-          { index: true, element: <OverviewPage /> },
+          { index: true, element: <HomePage /> },
           { path: 'properties', element: <PropertiesPage /> },
           { path: 'properties/:id', element: <PropertyDetailPage /> },
-          { path: 'performance', element: <PerformancePage /> },
-          { path: 'financials', element: <FinancialsPage /> },
-          { path: 'financials/reports/:id', element: <FinancialReportPage /> },
-          { path: 'financials/budgets/:id', element: <BudgetVersionPage /> },
-          { path: 'capex', element: <CapexPage /> },
-          { path: 'capex/:id', element: <CapexProjectPage /> },
-          { path: 'documents', element: <DocumentsPage /> },
-          { path: 'reports', element: <ReportsPage /> },
-          { path: 'reports/:id', element: <ReportPackagePage /> },
+          {
+            element: <RequireProperties />,
+            children: [
+              { path: 'performance', element: <PerformancePage /> },
+              { path: 'financials', element: <FinancialsPage /> },
+              { path: 'financials/reports/:id', element: <FinancialReportPage /> },
+              { path: 'financials/budgets/:id', element: <BudgetVersionPage /> },
+              { path: 'capex', element: <CapexPage /> },
+              { path: 'capex/:id', element: <CapexProjectPage /> },
+              { path: 'documents', element: <DocumentsPage /> },
+              { path: 'reports', element: <ReportsPage /> },
+              { path: 'reports/:id', element: <ReportPackagePage /> },
+            ],
+          },
           { path: 'notifications', element: <NotificationsPage /> },
           { path: 'imports', element: <ImportsPage /> },
           { path: 'imports/:id', element: <ImportDetailPage /> },

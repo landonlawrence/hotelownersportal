@@ -59,11 +59,25 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
 
       {perf.isLoading && <Loading />}
       {perf.error && <ErrorState error={perf.error} retry={() => perf.refetch()} />}
-      {d && (
+      {d && d.current.coverage.reportedDays === 0 && (
+        <Card>
+          <Empty title={`No performance data for ${VIEW_LABEL[view].toLowerCase()} yet`}>
+            Occupancy, ADR and RevPAR appear here once daily performance reports are imported
+            {properties.length === 1 ? ` for ${properties[0]!.name}` : ''}. Try a longer period, or bring in a report.
+            {canAny('ingestion.view') && (
+              <span className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
+                <Link className="btn btn-primary" to="/imports">Import data</Link>
+                <button className="btn" onClick={() => setView('ytd')}>Show year to date</button>
+              </span>
+            )}
+          </Empty>
+        </Card>
+      )}
+      {d && d.current.coverage.reportedDays > 0 && (
         <div className={`stack ${perf.isFetching ? 'refetching' : ''}`}>
           {d.current.partial && (
             <Notice tone="warn">
-              Incomplete data: {d.current.coverage.reportedDays} of {d.current.coverage.expectedDays} property-days reported
+              Incomplete data: {d.current.coverage.reportedDays} of {Math.max(d.current.coverage.expectedDays, d.current.coverage.reportedDays)} property-days reported
               {d.current.propertiesWithoutData.length > 0 && ` (no data: ${d.current.propertiesWithoutData.map((id) => properties.find((p) => p.id === id)?.code).join(', ')})`}. Totals cover reported days only; ratios are not
               extrapolated.
             </Notice>

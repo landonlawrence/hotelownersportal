@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PERMISSION_KEYS, ROLE_LABELS, ROLES, contrastRatio, type Role } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
@@ -6,12 +7,12 @@ import { apiJson } from '../lib/api';
 import { useDisplayNames, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
 import { AdminProperties } from './AdminProperties';
-import { Card, Empty, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate } from '../components/ui';
+import { Badge, Card, Empty, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate } from '../components/ui';
 
 type Tab = 'users' | 'invitations' | 'properties' | 'branding' | 'audit' | 'support' | 'platform';
 
 export function AdminPage() {
-  const { can, ctx } = usePortal();
+  const { can, ctx, mfaLocked } = usePortal();
   const tabs: Array<{ id: Tab; label: string; show: boolean }> = [
     { id: 'users', label: 'Users & access', show: can('admin.users') },
     { id: 'invitations', label: 'Invitations', show: can('admin.users') },
@@ -22,9 +23,22 @@ export function AdminPage() {
     { id: 'platform', label: 'Platform', show: !!ctx?.is_platform_admin },
   ];
   const visible = tabs.filter((t) => t.show);
-  const [chosen, setTab] = useState<Tab | null>(null);
+  const [params, setParams] = useSearchParams();
+  const chosen = params.get('tab') as Tab | null;
+  const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
   const tab: Tab = chosen && visible.some((t) => t.id === chosen) ? chosen : visible[0]?.id ?? 'users';
-  if (visible.length === 0) return <Empty title="No administrative access" />;
+  if (visible.length === 0) {
+    return mfaLocked('admin.users') || mfaLocked('admin.company') ? (
+      <Card>
+        <Empty title="Verify with two-factor authentication to open Administration">
+          Your company protects user, property and branding settings with 2FA.
+          <span className="row" style={{ justifyContent: 'center', marginTop: 8 }}><Link className="btn btn-primary" to="/security?next=/admin">Verify with 2FA</Link></span>
+        </Empty>
+      </Card>
+    ) : (
+      <Empty title="No administrative access" />
+    );
+  }
   return (
     <div className="stack">
       <PageHeader title="Administration" subtitle="Changes to access, branding and settings are recorded in the audit log." />
@@ -319,39 +333,87 @@ function Support() {
 export function Platform() {
   const qc = useQueryClient();
   const { ctx } = usePortal();
-  const companies = useQuery({ queryKey: ['platform-companies'], queryFn: async () => unwrap(await supabase.from('companies').select('id, slug, name, status, is_demo').order('name')) as Array<{ id: string; slug: string; name: string; status: string; is_demo: boolean }> });
+  const companies = useQuery({ queryKey: ['platform-companies'], queryFn: async () => unwrap(await supabase.from('companies').select('id, slug, name, status, is_demo, created_at').order('name')) as Array<{ id: string; slug: string; name: string; status: string; is_demo: boolean; created_at: string }> });
   const [support, setSupport] = useState({ company: '', reason: '', ticket: '', hours: 2 });
   const [prov, setProv] = useState({ slug: '', name: '', portal: '', email: '' });
+  const [slugEdited, setSlugEdited] = useState(false);
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
-  const call = async (fn: string, args: Record<string, unknown>, ok: string) => {
-    const { data, error } = await supabase.rpc(fn, args);
-    if (error) setMsg({ tone: 'bad', text: error.message });
-    else { setMsg({ tone: 'good', text: ok + (fn === 'provision_company' ? ` Send this invitation link to the company admin (valid 14 days): ${window.location.origin}/accept-invite#token=${(data as { token: string }).token}` : '') }); await qc.invalidateQueries(); }
+  const [invite, setInvite] = useState<{ company: string; email: string; link: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const slugify = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const provision = async () => {
+    setMsg(null);
+    const { data, error } = await supabase.rpc('provision_company', { p_slug: prov.slug, p_name: prov.name.trim(), p_portal_name: prov.portal.trim() || prov.name.trim(), p_admin_email: prov.email.trim() });
+    if (error) return setMsg({ tone: 'bad', text: error.message });
+    setInvite({ company: prov.name.trim(), email: prov.email.trim(), link: `${window.location.origin}/accept-invite#token=${(data as { token: string }).token}` });
+    setCopied(false);
+    setProv({ slug: '', name: '', portal: '', email: '' });
+    setSlugEdited(false);
+    await qc.invalidateQueries({ queryKey: ['platform-companies'] });
+  };
+  const openSupport = async () => {
+    setMsg(null);
+    const { error } = await supabase.rpc('open_support_session', { p_company_id: support.company, p_reason: support.reason, p_ticket_ref: support.ticket, p_hours: support.hours });
+    if (error) return setMsg({ tone: 'bad', text: error.message });
+    setMsg({ tone: 'good', text: 'Support session opened (audited; company admins can see and end it).' });
+    await qc.invalidateQueries();
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(invite!.link);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
   };
   return (
     <div className="stack">
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
-      {ctx?.aal !== 'aal2' && <Notice tone="warn">Support sessions require two-factor verification (Account security).</Notice>}
-      <Card title="Open a support session">
-        <div className="filter-bar" style={{ border: 0, padding: 0 }}>
-          <label className="field">Company<select value={support.company} onChange={(e) => setSupport({ ...support, company: e.target.value })}><option value="">Select…</option>{companies.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-          <label className="field">Ticket<input value={support.ticket} onChange={(e) => setSupport({ ...support, ticket: e.target.value })} /></label>
-          <label className="field">Reason<input value={support.reason} onChange={(e) => setSupport({ ...support, reason: e.target.value })} /></label>
-          <label className="field">Hours<input type="number" min={1} max={8} value={support.hours} onChange={(e) => setSupport({ ...support, hours: Number(e.target.value) })} /></label>
-          <button className="btn btn-primary" disabled={!support.company || support.reason.length < 10 || !support.ticket} onClick={() => call('open_support_session', { p_company_id: support.company, p_reason: support.reason, p_ticket_ref: support.ticket, p_hours: support.hours }, 'Support session opened (audited; company admins can see and end it).')}>Open session</button>
-        </div>
-      </Card>
+      {invite && (
+        <Card className="invite-card" title={`${invite.company} is ready`}>
+          <div className="stack" style={{ gap: 10 }}>
+            <p style={{ margin: 0 }}>Send this invitation link to <strong>{invite.email}</strong>. It works once and expires in 14 days. They’ll create their password and become the company administrator.</p>
+            <div className="copy-row">
+              <input readOnly value={invite.link} aria-label="Invitation link" onFocus={(e) => e.currentTarget.select()} />
+              <button className="btn btn-primary" onClick={copy}>{copied ? 'Copied' : 'Copy link'}</button>
+            </div>
+            <p className="small muted" style={{ margin: 0 }}>This link is shown only now. If it’s lost, provision again with a different slug or ask an engineer to reissue it.</p>
+          </div>
+        </Card>
+      )}
       <Card title="Provision a management company">
-        <div className="filter-bar" style={{ border: 0, padding: 0 }}>
-          <label className="field">Slug<input value={prov.slug} onChange={(e) => setProv({ ...prov, slug: e.target.value })} /></label>
-          <label className="field">Name<input value={prov.name} onChange={(e) => setProv({ ...prov, name: e.target.value })} /></label>
-          <label className="field">Portal name<input value={prov.portal} onChange={(e) => setProv({ ...prov, portal: e.target.value })} /></label>
-          <label className="field">First admin email<input type="email" value={prov.email} onChange={(e) => setProv({ ...prov, email: e.target.value })} /></label>
-          <button className="btn btn-primary" disabled={!prov.slug || !prov.name || !prov.email} onClick={() => call('provision_company', { p_slug: prov.slug, p_name: prov.name, p_portal_name: prov.portal || prov.name, p_admin_email: prov.email }, 'Company provisioned.')}>Provision</button>
+        <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void provision(); }}>
+          <label className="field">Company name<input required placeholder="Greyridge Hospitality" value={prov.name} onChange={(e) => setProv({ ...prov, name: e.target.value, slug: slugEdited ? prov.slug : slugify(e.target.value) })} /></label>
+          <label className="field">Short ID (slug)<input required pattern="[a-z0-9-]{2,40}" placeholder="greyridge" value={prov.slug} onChange={(e) => { setSlugEdited(true); setProv({ ...prov, slug: slugify(e.target.value) }); }} /></label>
+          <label className="field">Portal name<input placeholder={prov.name ? `${prov.name} Owner Portal` : 'Shown on the sign-in page'} value={prov.portal} onChange={(e) => setProv({ ...prov, portal: e.target.value })} /></label>
+          <label className="field">First admin’s email<input required type="email" placeholder="admin@company.com" value={prov.email} onChange={(e) => setProv({ ...prov, email: e.target.value })} /></label>
+          <div className="form-actions"><button className="btn btn-primary" disabled={!prov.slug || !prov.name || !prov.email}>Provision company</button></div>
+        </form>
+      </Card>
+      <Card title="Open a support session">
+        <div className="stack" style={{ gap: 10 }}>
+          {ctx?.aal !== 'aal2' && <Notice tone="warn">Support sessions need a 2FA-verified session. <Link to="/security">Set up or verify 2FA</Link>.</Notice>}
+          <p className="muted small" style={{ margin: 0 }}>Read-only access to one company for up to 8 hours. The company’s admins can see and end it, and everything is audited.</p>
+          <div className="form-grid">
+            <label className="field">Company<select value={support.company} onChange={(e) => setSupport({ ...support, company: e.target.value })}><option value="">Select…</option>{companies.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+            <label className="field">Ticket reference<input value={support.ticket} onChange={(e) => setSupport({ ...support, ticket: e.target.value })} /></label>
+            <label className="field">Reason (10+ characters)<input value={support.reason} onChange={(e) => setSupport({ ...support, reason: e.target.value })} /></label>
+            <label className="field">Hours<input type="number" min={1} max={8} value={support.hours} onChange={(e) => setSupport({ ...support, hours: Number(e.target.value) })} /></label>
+            <div className="form-actions"><button className="btn" disabled={!support.company || support.reason.length < 10 || !support.ticket || ctx?.aal !== 'aal2'} onClick={openSupport}>Open session</button></div>
+          </div>
         </div>
       </Card>
-      <Card flush title="Companies">
-        <table className="data"><tbody>{companies.data?.map((c) => <tr key={c.id}><td>{c.name}</td><td>{c.slug}</td><td><StatusBadge status={c.status} /></td><td>{c.is_demo && 'Demo'}</td></tr>)}</tbody></table>
+      <Card flush title={`Companies (${companies.data?.length ?? 0})`}>
+        {companies.data?.length ? (
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Name</th><th>Slug</th><th>Status</th><th>Created</th></tr></thead>
+              <tbody>{companies.data.map((c) => <tr key={c.id}><td><strong>{c.name}</strong>{c.is_demo && <> <Badge>Demo</Badge></>}</td><td className="muted">{c.slug}</td><td><StatusBadge status={c.status} /></td><td>{fmtDate(c.created_at)}</td></tr>)}</tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty title="No companies yet">Provision the first management company above.</Empty>
+        )}
       </Card>
     </div>
   );

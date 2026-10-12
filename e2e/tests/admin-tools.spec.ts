@@ -24,7 +24,7 @@ test('company admin adds a property with opening inventory and changes its room 
   await expect(row).toContainText('152');
 
   // New onboarding property does not make the portfolio "partial".
-  await page.getByRole('link', { name: 'Overview' }).click();
+  await page.getByRole('link', { name: 'Home' }).click();
   await expect(page.getByRole('heading', { name: 'Portfolio overview' })).toBeVisible();
   await expect(page.getByText('Harborview Austin Lakeside')).toBeVisible();
 });

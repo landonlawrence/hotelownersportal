@@ -21,7 +21,9 @@ async function token(): Promise<string> {
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${await token()}`);
-  const res = await fetch(`${base}${path}`, { ...init, headers });
+  const res = await fetch(`${base}${path}`, { ...init, headers }).catch(() => {
+    throw new ApiError(0, 'Can’t reach the portal server. Check your connection and try again.');
+  });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -33,6 +35,19 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     throw new ApiError(res.status, message);
   }
   return res;
+}
+
+export interface ApiMeta {
+  inboundEmailDomain: string;
+  emailEnabled?: boolean;
+  serverReady?: boolean;
+}
+
+/** Public, non-secret server status (no sign-in needed). */
+export async function fetchMeta(): Promise<ApiMeta> {
+  const res = await fetch(`${base}/meta`);
+  if (!res.ok) throw new ApiError(res.status, 'Server status unavailable');
+  return (await res.json()) as ApiMeta;
 }
 
 export async function apiJson<T>(path: string, init: RequestInit = {}): Promise<T> {

@@ -9,6 +9,7 @@ import { documents } from './routes/documents.js';
 import { exportsRoute } from './routes/exports.js';
 import { imports } from './routes/imports.js';
 import { localStorageEnabled, localStorageRoutes } from './routes/localStorage.js';
+import { serviceKeyConfigured } from './supabase.js';
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -38,7 +39,13 @@ export function createApp() {
 
   app.get('/health', (c) => c.json({ ok: true, env: config().APP_ENV }));
   // Public, non-secret configuration for the SPA.
-  app.get('/meta', (c) => c.json({ inboundEmailDomain: config().INBOUND_EMAIL_DOMAIN }));
+  app.get('/meta', async (c) =>
+    c.json({
+      inboundEmailDomain: config().INBOUND_EMAIL_DOMAIN,
+      emailEnabled: config().EMAIL_DRIVER === 'ses',
+      serverReady: await serviceKeyConfigured(),
+    }),
+  );
   app.route('/documents', documents);
   app.route('/imports', imports);
   app.route('/exports', exportsRoute);

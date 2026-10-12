@@ -4,26 +4,41 @@ import { supabase, unwrap } from '../lib/supabase';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, PageHeader, StatusBadge, fmtDate } from '../components/ui';
 import { OverviewPage } from './Overview';
+import { Icon } from '../components/icons';
 
 export function PropertiesPage() {
-  const { properties } = usePortal();
+  const { properties, isCompanyAdmin } = usePortal();
   const company = useCompany();
   const inv = useQuery({
     queryKey: ['inventory', company.company_id],
     queryFn: async () => unwrap(await supabase.from('room_inventory_history').select('property_id, room_count, effective_from, effective_to').eq('company_id', company.company_id)) as Array<{ property_id: string; room_count: number; effective_from: string; effective_to: string | null }>,
   });
-  if (properties.length === 0) return <Empty title="No properties">You have not been granted access to any properties in {company.company_name}.</Empty>;
+  const addButton = isCompanyAdmin && <Link className="btn btn-primary" to="/admin?tab=properties"><Icon name="building" size={16} /> Add property</Link>;
+  if (properties.length === 0) {
+    return (
+      <div className="stack">
+        <PageHeader title="Properties" actions={addButton} />
+        <Card>
+          {isCompanyAdmin ? (
+            <Empty title="No hotels yet">Add your first property to start tracking performance, budgets, CapEx and documents.</Empty>
+          ) : (
+            <Empty title="No properties shared with you yet">{company.company_name} hasn’t given you access to a hotel yet.</Empty>
+          )}
+        </Card>
+      </div>
+    );
+  }
   return (
     <div className="stack">
-      <PageHeader title="Properties" subtitle={`${properties.length} properties you can access in ${company.company_name}`} />
+      <PageHeader title="Properties" subtitle={`${properties.length} ${properties.length === 1 ? 'property' : 'properties'} you can access in ${company.company_name}`} actions={addButton} />
       <div className="grid grid-2">
         {properties.map((p) => {
           const current = inv.data?.find((i) => i.property_id === p.id && i.effective_to === null);
           return (
-            <Card key={p.id} title={<Link to={`/properties/${p.id}`}><h2>{p.name}</h2></Link>} actions={<StatusBadge status={p.status} />}>
+            <Card key={p.id} className="property-card" title={<Link to={`/properties/${p.id}`} className="card-link"><h2>{p.name}</h2></Link>} actions={<StatusBadge status={p.status} />}>
               <dl className="kv">
                 <dt>Code</dt><dd>{p.code}</dd>
-                <dt>Location</dt><dd>{[p.city, p.region].filter(Boolean).join(', ')}</dd>
+                <dt>Location</dt><dd>{[p.city, p.region].filter(Boolean).join(', ') || '—'}</dd>
                 <dt>Rooms</dt><dd>{current?.room_count ?? '—'}</dd>
                 <dt>Timezone</dt><dd>{p.timezone}</dd>
                 <dt>Opened</dt><dd>{fmtDate(p.opened_on)}</dd>
