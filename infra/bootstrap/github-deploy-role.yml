@@ -9,6 +9,14 @@ Parameters:
     Type: String
     Default: landonlawrence/hotelownersportal
     Description: owner/repo allowed to assume the role
+  GitHubOwnerId:
+    Type: String
+    Default: '291139031'
+    Description: Numeric GitHub id of the owner (GitHub puts immutable ids in the OIDC subject)
+  GitHubRepoId:
+    Type: String
+    Default: '1409339503'
+    Description: Numeric GitHub id of the repository
   Environment:
     Type: String
     AllowedValues: [staging, production]
@@ -49,7 +57,13 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${Environment}
+                # Immutable-id subject (current GitHub format) or the legacy name-only subject.
+                token.actions.githubusercontent.com:sub:
+                  - !Sub
+                    - 'repo:${Owner}@${GitHubOwnerId}/${Name}@${GitHubRepoId}:environment:${Environment}'
+                    - Owner: !Select [0, !Split ['/', !Ref GitHubRepo]]
+                      Name: !Select [1, !Split ['/', !Ref GitHubRepo]]
+                  - !Sub repo:${GitHubRepo}:environment:${Environment}
       Policies:
         - PolicyName: deploy
           PolicyDocument:
