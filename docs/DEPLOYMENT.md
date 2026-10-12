@@ -17,7 +17,7 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
 1. **Supabase project** — create a project in the region closest to users. Settings:
    - Auth → enable TOTP MFA; disable public sign-ups (users join via invitation); set Site URL to the primary portal domain and add each tenant domain to redirect URLs; configure SMTP for auth emails.
    - Use asymmetric JWT signing keys (default for new projects). The API verifies via `/auth/v1/.well-known/jwks.json`.
-   - Note: project ref, URL, publishable key, service-role key, DB password.
+   - Note: project ref, URL, publishable key, service-role key.
 2. **AWS account** — bootstrap CDK: `npx cdk bootstrap aws://<account>/us-east-1`.
 3. **GitHub OIDC deploy role** — IAM role trusted for `token.actions.githubusercontent.com` restricted to this repo and the `staging`/`production` environments, with permission to assume the CDK bootstrap roles.
 4. **GitHub environments** `staging` and `production` (production with required reviewers). Variables / secrets:
@@ -31,7 +31,6 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
 | `SUPABASE_ANON_KEY` | var | publishable key (browser-safe) |
 | `CDK_CONTEXT_JSON` | var | `{"account":"123456789012","supabaseUrl":"…","supabaseAnonKey":"…","allowedOrigins":["https://owners.example.com"],"appDomainNames":["owners.example.com"],"certificateArn":"arn:aws:acm:us-east-1:…","inboundEmailDomain":"inbound.example.com","notificationFromAddress":"no-reply@example.com","enableMalwareScanning":true,"enableWaf":true,"alarmEmail":"ops@example.com"}` |
 | `SUPABASE_ACCESS_TOKEN` | secret | Supabase personal access token (deploy only) |
-| `SUPABASE_DB_PASSWORD` | secret | database password (deploy only) |
 | `STAGING_ENABLED` | repo var | `true` to enable automatic staging deploys |
 
 5. **First deploy**, then set the service-role key **out of band** (never in GitHub or the browser):
@@ -47,7 +46,7 @@ The demo seed (`supabase/seeds/*`) is only loaded by `supabase db reset` locally
 
 ## Database only (before AWS exists)
 
-The **Supabase migrations** workflow (`.github/workflows/supabase-migrate.yml`, manual dispatch) applies migrations to one environment's Supabase project without touching AWS. It needs only `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` (variables) and `SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD` (secrets) on the GitHub environment.
+The **Supabase migrations** workflow (`.github/workflows/supabase-migrate.yml`, manual dispatch) applies migrations to one environment's Supabase project without touching AWS. It needs only `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` (variables) and `SUPABASE_ACCESS_TOKEN` (secret). No database password is needed: the CLI signs in through a short-lived login role created with the access token on the GitHub environment.
 
 1. Run it with `dry_run` ticked (the default): it links the project and lists pending migrations.
 2. Run it again with `dry_run` unticked to apply them.

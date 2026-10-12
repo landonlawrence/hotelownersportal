@@ -31,19 +31,20 @@ jobs:
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify environment configuration
         run: |
-          for v in SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD; do
+          for v in SUPABASE_PROJECT_REF SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_ACCESS_TOKEN; do
             if [ -z "${!v}" ]; then echo "::error::$v is not configured for $TARGET"; exit 1; fi
           done
           if [ "$SUPABASE_URL" != "https://$SUPABASE_PROJECT_REF.supabase.co" ]; then
             echo "::error::SUPABASE_URL does not match SUPABASE_PROJECT_REF"; exit 1
           fi
 
+      # No database password: with only the access token the CLI signs in through a
+      # short-lived login role created via the Management API.
       - uses: supabase/setup-cli@v1
         with: { version: 2.120.0 }
 

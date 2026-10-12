@@ -66,7 +66,6 @@ jobs:
         env:
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
 
       # 2. AWS infrastructure and Lambda code.
       - uses: aws-actions/configure-aws-credentials@v4
