@@ -45,7 +45,14 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 
 - Supabase staging project `dvkqwkvnvvwltezvyqgq` (us-east-1, Free plan) created by the owner. GitHub environment `staging` holds `SUPABASE_PROJECT_REF`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` (publishable key) and the `SUPABASE_ACCESS_TOKEN` secret.
 - All 8 migrations applied by the **Supabase migrations** workflow (run #3). The anonymous-key lockdown check passed on 57 tables.
-- No seed, no users, no companies yet. AWS (API, documents, email ingestion) is not provisioned, so the portal is not usable end to end.
+- No seed, no users, no companies yet.
+
+## Staging AWS (2026-10-12)
+
+- AWS account 872590157266, us-east-1. CDK bootstrapped; GitHub OIDC role `hop-github-deploy-staging` (stack `hop-github-deploy-staging`, trusts GitHub's immutable-id subject).
+- Stack `HotelOwnersPortal-staging` deployed by Deploy run #5. Portal: https://d343u99ezxc5r9.cloudfront.net (API health OK).
+- Fixed on the way: empty S3 CORS rule on first deploy, reserved Lambda concurrency rejected by new-account limits, orphaned key/secret after a failed create (staging no longer retains them).
+- Not configured yet: service-role key in Secrets Manager, first platform admin, SES (no email; invitation links are shown to the inviter), custom domain, malware scanning, WAF.
 
 ## Defects found and fixed during verification
 

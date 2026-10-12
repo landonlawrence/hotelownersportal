@@ -326,7 +326,7 @@ export function Platform() {
   const call = async (fn: string, args: Record<string, unknown>, ok: string) => {
     const { data, error } = await supabase.rpc(fn, args);
     if (error) setMsg({ tone: 'bad', text: error.message });
-    else { setMsg({ tone: 'good', text: ok + (fn === 'provision_company' ? ` Admin invitation token: ${(data as { token: string }).token}` : '') }); await qc.invalidateQueries(); }
+    else { setMsg({ tone: 'good', text: ok + (fn === 'provision_company' ? ` Send this invitation link to the company admin (valid 14 days): ${window.location.origin}/accept-invite#token=${(data as { token: string }).token}` : '') }); await qc.invalidateQueries(); }
   };
   return (
     <div className="stack">
