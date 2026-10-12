@@ -52,6 +52,7 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 - AWS account 872590157266, us-east-1. CDK bootstrapped; GitHub OIDC role `hop-github-deploy-staging` (stack `hop-github-deploy-staging`, trusts GitHub's immutable-id subject).
 - Stack `HotelOwnersPortal-staging` deployed by Deploy run #5. Portal: https://d343u99ezxc5r9.cloudfront.net (API health OK).
 - Fixed on the way: empty S3 CORS rule on first deploy, reserved Lambda concurrency rejected by new-account limits, orphaned key/secret after a failed create (staging no longer retains them).
+- Supabase Auth for staging matches local: sign-ups ON (the invitation page creates the account), email confirmation OFF. Accounts without a membership see nothing (RLS). **Before production:** create invited users server-side (Auth admin invite) so public sign-up can be turned off and the email is verified by the invite link itself.
 - Not configured yet: service-role key in Secrets Manager, first platform admin, SES (no email; invitation links are shown to the inviter), custom domain, malware scanning, WAF.
 
 ## Defects found and fixed during verification
