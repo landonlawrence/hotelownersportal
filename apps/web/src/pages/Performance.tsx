@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { computeKpis, formatCurrency, formatNumber, formatPercent, monthEnd, monthStart, normaliseDay } from '@hop/core';
+import { addDays, computeKpis, formatCurrency, formatNumber, formatPercent, monthEnd, monthStart, normaliseDay } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
 import { downloadFromApi } from '../lib/api';
 import { defaultAsOf } from '../lib/performance';
+import { DownloadButton } from '../components/DownloadButton';
+import { PropertiesErrorState } from '../components/NoProperties';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, PageHeader, fmtDate } from '../components/ui';
 
@@ -13,10 +15,11 @@ interface Day {
 }
 
 export function PerformancePage() {
-  const { properties } = usePortal();
+  const { properties, propertiesError, refetchProperties } = usePortal();
   const company = useCompany();
-  const [propertyId, setPropertyId] = useState(properties[0]?.id ?? '');
-  const [month, setMonth] = useState(defaultAsOf().slice(0, 7));
+  const [picked, setPropertyId] = useState('');
+  const propertyId = picked || properties[0]?.id || '';
+  const [month, setMonth] = useState(() => defaultAsOf(properties.slice(0, 1)).slice(0, 7));
   const from = monthStart(`${month}-01`);
   const to = monthEnd(`${month}-01`);
   const cfg = useQuery({ queryKey: ['cfg', propertyId], enabled: !!propertyId, queryFn: async () => unwrap(await supabase.from('property_reporting_config').select('ooo_treatment, comp_treatment').eq('property_id', propertyId).maybeSingle()) as { ooo_treatment: 'exclude' | 'include'; comp_treatment: 'exclude' | 'include' } | null });
@@ -31,10 +34,13 @@ export function PerformancePage() {
     return out;
   }, [from, to]);
   const property = properties.find((p) => p.id === propertyId);
+  // "Today" and "yesterday" follow the hotel's own business date, not the viewer's clock.
+  const lastClosed = defaultAsOf(property ? [property] : []);
+  if (propertiesError && properties.length === 0) return <PropertiesErrorState error={propertiesError} retry={() => void refetchProperties()} />;
   if (properties.length === 0) return <Empty title="No properties" />;
   return (
     <div className="stack">
-      <PageHeader title="Daily performance" subtitle="Provisional figures from PMS reports, by property-local business date." actions={<button className="btn" onClick={() => downloadFromApi(`/exports/performance.csv?company_id=${company.company_id}&from=${from}&to=${to}&grain=day&property_ids=${propertyId}`, 'daily.csv')}>Export CSV</button>} />
+      <PageHeader title="Daily performance" subtitle="Provisional figures from PMS reports, by property-local business date." actions={<DownloadButton label="Export CSV" run={() => downloadFromApi(`/exports/performance.csv?company_id=${company.company_id}&from=${from}&to=${to}&grain=day&property_ids=${propertyId}`, 'daily.csv')} />} />
       <div className="filter-bar">
         <label className="field">Property<select value={propertyId} onChange={(e) => setPropertyId(e.target.value)}>{properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         <label className="field">Month<input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} /></label>
@@ -47,7 +53,7 @@ export function PerformancePage() {
               <tbody>
                 {days.map((d) => {
                   const r = q.data?.find((x) => x.business_date === d);
-                  if (!r) return <tr key={d}><td>{fmtDate(d, { weekday: 'short', month: 'short', day: 'numeric' })}</td><td colSpan={12} className="muted small">{d > defaultAsOf() ? 'Future date' : 'Unavailable — no report loaded'}</td></tr>;
+                  if (!r) return <tr key={d}><td>{fmtDate(d, { weekday: 'short', month: 'short', day: 'numeric' })}</td><td colSpan={12} className="muted small">{d > lastClosed ? (addDays(lastClosed, 1) === d ? 'Not yet due — today’s night audit has not closed' : 'Future date') : 'Not yet reported — no report loaded'}</td></tr>;
                   const c = normaliseDay({ propertyId, businessDate: d, physicalRooms: r.physical_rooms, roomsOutOfOrder: r.rooms_out_of_order, roomsSold: r.rooms_sold, roomsComp: r.rooms_comp, roomRevenue: Number(r.room_revenue), totalRevenue: r.total_revenue === null ? null : Number(r.total_revenue) }, { oooTreatment: cfg.data?.ooo_treatment ?? 'exclude', compTreatment: cfg.data?.comp_treatment ?? 'exclude' });
                   const k = computeKpis(c);
                   return (

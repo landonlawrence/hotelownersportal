@@ -25,6 +25,13 @@ export function fromPostgrest(err: { code?: string; message?: string } | null): 
     case '23505':
     case '55000':
       return new HttpError(409, msg, 'conflict');
+    case '23503':
+      return new HttpError(400, 'A referenced record (category, property or linked item) does not exist', 'bad_request');
+    case '22007':
+    case '22008':
+      return new HttpError(400, 'Invalid date', 'bad_request');
+    case '22P02':
+      return new HttpError(400, 'Invalid value', 'bad_request');
     case '28000':
     case 'PGRST301':
       return new HttpError(401, 'Not authenticated', 'unauthenticated');

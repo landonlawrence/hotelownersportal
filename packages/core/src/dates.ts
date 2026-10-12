@@ -143,6 +143,31 @@ export function localToday(timeZone: string, now: Date = new Date()): IsoDate {
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
+/** Today's date on this device (not UTC): for date inputs that default to "today". */
+export function deviceToday(now: Date = new Date()): IsoDate {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * The latest business date that has closed at every one of these hotels (yesterday in the
+ * hotel's own time zone; for a portfolio, the earliest of them). Falls back to the device's
+ * yesterday when no valid time zone is given.
+ */
+export function lastClosedBusinessDate(timeZones: readonly string[], now: Date = new Date()): IsoDate {
+  let out: IsoDate | null = null;
+  for (const tz of new Set(timeZones)) {
+    let today: IsoDate;
+    try {
+      today = localToday(tz, now);
+    } catch {
+      continue;
+    }
+    const y = addDays(today, -1);
+    if (out === null || y < out) out = y;
+  }
+  return out ?? addDays(deviceToday(now), -1);
+}
+
 export type PeriodView = 'day' | 'mtd' | 'ytd' | 'month' | 'custom';
 
 /** Resolve a dashboard view to a concrete date range ending at `asOf`. */

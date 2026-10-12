@@ -101,9 +101,6 @@ export class BrandedPdf {
     this.page.drawText(pdfSafe(this.brand.portalName), { x: PAGE.margin, y: PAGE.h - 34, size: 14, font: this.bold, color: onBand });
     const right = pdfSafe(this.brand.companyName);
     this.page.drawText(right, { x: PAGE.w - PAGE.margin - this.font.widthOfTextAtSize(right, 9), y: PAGE.h - 33, size: 9, font: this.font, color: onBand });
-    if (this.watermark) {
-      this.page.drawText(pdfSafe(this.watermark), { x: 90, y: 260, size: 46, font: this.bold, color: rgb(0.85, 0.2, 0.2), opacity: 0.12, rotate: degrees(35) });
-    }
     this.y = PAGE.h - 84;
   }
 
@@ -207,9 +204,26 @@ export class BrandedPdf {
     return out;
   }
 
+  /** Diagonal watermark drawn last (above table shading), sized to fit the page. */
+  private drawWatermark(p: PDFPage) {
+    if (!this.watermark) return;
+    const text = pdfSafe(this.watermark);
+    const angle = 35;
+    const rad = (angle * Math.PI) / 180;
+    const unit = this.bold.widthOfTextAtSize(text, 1);
+    const fitW = (PAGE.w - PAGE.margin * 2) / (unit * Math.cos(rad));
+    const fitH = (PAGE.h - 200) / (unit * Math.sin(rad));
+    const size = Math.max(10, Math.min(46, fitW, fitH));
+    const w = unit * size;
+    const x = PAGE.w / 2 - (w / 2) * Math.cos(rad) + (size / 3) * Math.sin(rad);
+    const y = PAGE.h / 2 - (w / 2) * Math.sin(rad) - (size / 3) * Math.cos(rad);
+    p.drawText(text, { x, y, size, font: this.bold, color: rgb(0.85, 0.2, 0.2), opacity: 0.12, rotate: degrees(angle) });
+  }
+
   async finish(generatedFor: string): Promise<Uint8Array> {
     const total = this.pages.length;
     this.pages.forEach((p, i) => {
+      this.drawWatermark(p);
       const footer = pdfSafe(this.brand.reportFooter ?? `${this.brand.companyName}. Confidential.`);
       p.drawLine({ start: { x: PAGE.margin, y: 40 }, end: { x: PAGE.w - PAGE.margin, y: 40 }, thickness: 0.5, color: this.hair });
       p.drawText(footer.slice(0, 120), { x: PAGE.margin, y: 28, size: 7, font: this.font, color: this.muted });

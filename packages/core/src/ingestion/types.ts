@@ -29,6 +29,8 @@ export interface PropertyRef {
 export interface ParseContext {
   /** Property codes (as they appear in the report) → company property. Only the route's company. */
   propertyByCode: Map<string, PropertyRef>;
+  /** True when codes resolve only through a source's mappings (email/route imports). */
+  routed?: boolean;
   /** "Today" (property-local) resolver used to reject future business dates. */
   todayFor: (p: PropertyRef) => IsoDate;
   /** Source account code → reporting account id (company mapping, property overrides first). */

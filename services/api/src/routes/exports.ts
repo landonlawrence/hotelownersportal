@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import {
+  addDays,
   computeKpis,
+  localToday,
+  minIsoDate,
   formatNumber,
   isIsoDate,
   rowToComponents,
@@ -84,9 +87,9 @@ exportsRoute.get('/performance.csv', async (c) => {
       if (!ok) throw forbidden('No access to one or more requested properties');
     }
   }
-  const { data: props, error: propErr } = await db.from('properties').select('id, code, name, opened_on, status').eq('company_id', company_id).order('code');
+  const { data: props, error: propErr } = await db.from('properties').select('id, code, name, opened_on, status, timezone').eq('company_id', company_id).order('code');
   if (propErr) throw fromPostgrest(propErr);
-  let properties = (props ?? []) as Array<{ id: string; code: string; name: string; opened_on: string | null; status: string }>;
+  let properties = (props ?? []) as Array<{ id: string; code: string; name: string; opened_on: string | null; status: string; timezone: string }>;
   if (requested) properties = properties.filter((p) => requested.includes(p.id));
   const { data: rows, error } = await db.rpc('performance_rollup', {
     p_company_id: company_id,
@@ -107,17 +110,27 @@ exportsRoute.get('/performance.csv', async (c) => {
     [],
     ['property_code', 'property_name', 'period', 'available_room_nights', 'rooms_sold', 'occupancy_pct', 'adr', 'revpar', 'room_revenue', 'total_revenue', 'reported_days'],
   ];
+  // Coverage never expects days that have not yet been reported (today or later, property-local).
+  const propertyCoverage = (p: (typeof properties)[number]) => {
+    const s = summarizePeriod(rollup.filter((r) => r.property_id === p.id), [{ id: p.id, openedOn: p.opened_on, status: p.status }], { from, to }, minIsoDate(to, addDays(localToday(p.timezone), -1)));
+    const { reportedDays, expectedDays } = s.coverage;
+    return reportedDays >= expectedDays ? 'complete' : `${reportedDays}/${expectedDays} days`;
+  };
+  if (grain === 'total') out[4]!.push('coverage');
   for (const r of rollup.sort((a, b) => (byId.get(a.property_id)?.code ?? '').localeCompare(byId.get(b.property_id)?.code ?? '') || a.bucket.localeCompare(b.bucket))) {
     const p = byId.get(r.property_id);
     if (!p) continue;
     const k = computeKpis(rowToComponents(r));
-    out.push([p.code, p.name, grain === 'total' ? `${from}..${to}` : r.bucket, k.availableRoomNights, k.roomsSold, fmt(k.occupancyPct, 1), fmt(k.adr), fmt(k.revpar), fmt(k.roomRevenue), fmt(k.totalRevenue), r.reported_days]);
+    const row: Array<string | number | null> = [p.code, p.name, grain === 'total' ? `${from}..${to}` : r.bucket, k.availableRoomNights, k.roomsSold, fmt(k.occupancyPct, 1), fmt(k.adr), fmt(k.revpar), fmt(k.roomRevenue), fmt(k.totalRevenue), r.reported_days];
+    if (grain === 'total') row.push(propertyCoverage(p));
+    out.push(row);
   }
-  if (grain === 'total') {
-    const s = summarizePeriod(rollup, properties.map((p) => ({ id: p.id, openedOn: p.opened_on, status: p.status })), { from, to }, to);
+  if (grain === 'total' && properties.length > 1) {
+    const yesterday = properties.reduce((acc, p) => (addDays(localToday(p.timezone), -1) > acc ? addDays(localToday(p.timezone), -1) : acc), '0000-01-01');
+    const s = summarizePeriod(rollup, properties.map((p) => ({ id: p.id, openedOn: p.opened_on, status: p.status })), { from, to }, minIsoDate(to, yesterday));
     out.push([
-      'PORTFOLIO',
-      s.partial ? `Partial coverage: ${s.coverage.reportedDays}/${s.coverage.expectedDays} property-days` : 'All properties',
+      requested ? 'SELECTED' : 'PORTFOLIO',
+      requested ? `Selected properties (${properties.length})` : `All properties (${properties.length})`,
       `${from}..${to}`,
       s.kpis.availableRoomNights,
       s.kpis.roomsSold,
@@ -127,6 +140,7 @@ exportsRoute.get('/performance.csv', async (c) => {
       fmt(s.kpis.roomRevenue),
       fmt(s.kpis.totalRevenue),
       s.coverage.reportedDays,
+      s.partial ? `Coverage: partial (${s.coverage.reportedDays}/${s.coverage.expectedDays} property-days)` : 'Coverage: complete',
     ]);
   }
   out.push([], ['Occupancy = rooms sold / available room nights; ADR = room revenue / rooms sold; RevPAR = room revenue / available room nights. Blank = unavailable.']);

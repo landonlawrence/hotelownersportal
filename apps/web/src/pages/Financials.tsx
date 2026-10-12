@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from '../lib/supabase';
 import { buildStatement } from '@hop/core';
 import { useAccounts, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
-import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';
+import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, TabPanel, Tabs, confirmAction, currentMonthValue, dbErrorMessage, errorMessage, fmtDate, fmtMonth, lastClosedMonthValue } from '../components/ui';
 import { StatementTable } from '../components/StatementTable';
+import { MfaLockedNotice } from '../components/RequirePermission';
 
 type Tab = 'statements' | 'variance' | 'budgets' | 'mappings';
 
@@ -19,21 +20,24 @@ export function FinancialsPage() {
     { id: 'mappings', label: 'Account mappings', show: can('financials.edit') },
   ];
   const visible = tabs.filter((t) => t.show);
-  const [chosen, setTab] = useState<Tab | null>(null);
+  const [params, setParams] = useSearchParams();
+  const chosen = params.get('tab') as Tab | null;
+  const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
   const tab: Tab = chosen && visible.some((t) => t.id === chosen) ? chosen : visible[0]?.id ?? 'statements';
   if (visible.length === 0) return <Empty title="No financial access">Your access does not include financial information.</Empty>;
   return (
     <div className="stack">
       <PageHeader title="Budgets & Financials" subtitle="Published accounting figures. Uploading a PDF does not change structured data — figures come from validated imports." />
-      <div className="tabs" role="tablist">
-        {visible.map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</button>
-        ))}
-      </div>
-      {tab === 'statements' && <Statements />}
-      {tab === 'variance' && <VarianceView />}
-      {tab === 'budgets' && <Budgets />}
-      {tab === 'mappings' && <Mappings />}
+      <MfaLockedNotice perms={['financials.view_draft', 'financials.edit', 'financials.publish', 'budgets.edit', 'budgets.approve']}>
+        Some data and actions need a 2FA-verified session: draft statements, new statements and budgets, approvals and account mappings.
+      </MfaLockedNotice>
+      <Tabs label="Financial sections" idPrefix="fin" tabs={visible} value={tab} onChange={setTab} />
+      <TabPanel idPrefix="fin" value={tab}>
+        {tab === 'statements' && <Statements />}
+        {tab === 'variance' && <VarianceView />}
+        {tab === 'budgets' && <Budgets />}
+        {tab === 'mappings' && <Mappings />}
+      </TabPanel>
     </div>
   );
 }
@@ -50,7 +54,7 @@ interface ReportRow {
 }
 
 function Statements() {
-  const { properties, can, canAny } = usePortal();
+  const { properties, can, canAny, mfaLocked } = usePortal();
   const company = useCompany();
   const [propertyId, setPropertyId] = useState<string>('');
   const [creating, setCreating] = useState(false);
@@ -79,7 +83,7 @@ function Statements() {
       }
       actions={canAny('financials.edit') && <button className="btn btn-primary" onClick={() => setCreating(true)}>New statement</button>}
     >
-      {q.isLoading ? <Loading /> : q.error ? <ErrorState error={q.error} /> : (q.data ?? []).length === 0 ? <Empty title="No financial statements available" /> : (
+      {q.isLoading ? <Loading /> : q.error ? <ErrorState error={q.error} /> : (q.data ?? []).length === 0 ? <Empty title="No financial statements available">{mfaLocked('financials.view_draft') && 'Verify with 2FA to see draft statements.'}</Empty> : (
         <div className="table-wrap">
           <table className="data">
             <thead><tr><th>Period</th><th>Property</th><th>Statement</th><th>Revision</th><th>Status</th><th>Published</th></tr></thead>
@@ -109,14 +113,25 @@ function NewStatement({ onClose, canEdit }: { onClose: () => void; canEdit: (id:
   const create = useRpc('create_financial_report');
   const eligible = properties.filter((p) => canEdit(p.id));
   const [pid, setPid] = useState(eligible[0]?.id ?? '');
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  // Default to the last closed month; future months cannot have statements.
+  const [month, setMonth] = useState(lastClosedMonthValue());
+  const maxMonth = currentMonthValue();
+  const monthError = !month ? 'Choose a period.' : month > maxMonth ? 'Statements can’t be created for a future month.' : null;
+  const go = async () => {
+    try {
+      const id = await create.mutateAsync({ p_property_id: pid, p_period_month: `${month}-01`, p_title: null });
+      navigate(`/financials/reports/${id}`);
+    } catch {
+      /* shown above */
+    }
+  };
   return (
     <Modal title="New financial statement" onClose={onClose}>
       <p className="muted">Creates an empty draft for manual entry. Use Data Imports for standardized spreadsheet actuals.</p>
       {create.error && <Notice tone="bad">{errorMessage(create.error)}</Notice>}
       <label className="field">Property<select value={pid} onChange={(e) => setPid(e.target.value)}>{eligible.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-      <label className="field">Period<input type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></label>
-      <button className="btn btn-primary" disabled={!pid || create.isPending} onClick={async () => { const id = await create.mutateAsync({ p_property_id: pid, p_period_month: `${month}-01`, p_title: null }); navigate(`/financials/reports/${id}`); }}>Create draft</button>
+      <label className="field">Period<input type="month" max={maxMonth} value={month} onChange={(e) => setMonth(e.target.value)} />{monthError && <span className="field-error">{monthError}</span>}</label>
+      <button className="btn btn-primary" disabled={!pid || create.isPending || !!monthError} onClick={() => void go()}>{create.isPending ? 'Creating…' : 'Create draft'}</button>
     </Modal>
   );
 }
@@ -126,12 +141,21 @@ function VarianceView() {
   const company = useCompany();
   const accounts = useAccounts(company.company_id);
   const [propertyId, setPropertyId] = useState(properties[0]?.id ?? '');
-  const lastMonth = useMemo(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 2); return d.toISOString().slice(0, 7); }, []);
+  // Two months back (the latest month normally published), from the local calendar so every viewer gets the same month.
+  const lastMonth = useMemo(() => lastClosedMonthValue(2), []);
   const [month, setMonth] = useState(lastMonth);
   const [ytd, setYtd] = useState(false);
   const qc = useQueryClient();
   const [commentFor, setCommentFor] = useState<{ accountId: string; label: string } | null>(null);
-  const { can } = usePortal();
+  const [editing, setEditing] = useState<{ id: string; body: string; visibility: string } | null>(null);
+  const [commentErr, setCommentErr] = useState<string | null>(null);
+  const { can, ctx } = usePortal();
+  const commentAction = async (fn: () => PromiseLike<{ error: { message: string; code?: string } | null }>) => {
+    setCommentErr(null);
+    const { error } = await fn();
+    if (error) setCommentErr(dbErrorMessage(error));
+    await qc.invalidateQueries({ queryKey: ['variance'] });
+  };
   const from = ytd ? `${month.slice(0, 4)}-01-01` : `${month}-01`;
   const to = `${month}-01`;
   const pyFrom = `${Number(from.slice(0, 4)) - 1}${from.slice(4)}`;
@@ -160,8 +184,15 @@ function VarianceView() {
       rows.filter((r) => r.property_id === propertyId).forEach((r) => m.set(r.account_id, (m.get(r.account_id) ?? 0) + Number(r.amount)));
       return m;
     };
-    const actualMonths = new Set(data.data.actuals.filter((r) => r.property_id === propertyId).map((r) => r.period_month));
-    return { ...buildStatement(accounts.data, agg(data.data.actuals), agg(data.data.budget), agg(data.data.prior)), monthsWithActuals: actualMonths.size };
+    const actualMonths = new Set(data.data.actuals.filter((r) => r.property_id === propertyId).map((r) => r.period_month.slice(0, 7)));
+    // Compare like-for-like: budget and prior year only for months that have published actuals.
+    const inActualMonths = <T extends { period_month: string }>(rows: T[], shiftYears = 0) =>
+      rows.filter((r) => actualMonths.has(`${Number(r.period_month.slice(0, 4)) + shiftYears}${r.period_month.slice(4, 7)}`));
+    return {
+      ...buildStatement(accounts.data, agg(data.data.actuals), agg(inActualMonths(data.data.budget)), agg(inActualMonths(data.data.prior, 1))),
+      monthsWithActuals: actualMonths.size,
+      actualMonthList: [...actualMonths].sort(),
+    };
   }, [data.data, accounts.data, propertyId]);
   const expectedMonths = ytd ? Number(month.slice(5, 7)) : 1;
   const property = properties.find((p) => p.id === propertyId);
@@ -177,18 +208,33 @@ function VarianceView() {
         <Card title={`${property?.name} — ${ytd ? `YTD through ${fmtMonth(`${month}-01`)}` : fmtMonth(`${month}-01`)}`} flush>
           {statement.monthsWithActuals < expectedMonths && (
             <div style={{ padding: '0 16px' }}>
-              <Notice tone="warn">Published actuals are available for {statement.monthsWithActuals} of {expectedMonths} month(s). Unpublished periods are excluded, so totals are incomplete.</Notice>
+              <Notice tone="warn">
+                Published actuals are available for {statement.monthsWithActuals} of {expectedMonths} month(s)
+                {statement.actualMonthList.length > 0 && ` (${statement.actualMonthList.map((m) => fmtDate(`${m}-01`, { month: 'short' })).join(', ')} compared)`}. Budget and prior year cover the same months only; unpublished periods are excluded.
+              </Notice>
             </div>
           )}
           <StatementTable rows={statement.rows} statistics={statement.statistics} currency={property?.currency ?? 'USD'} onComment={can('commentary.edit', propertyId) ? (r) => setCommentFor({ accountId: r.accountId!, label: r.label }) : undefined} />
           {comments.length > 0 && (
             <div style={{ padding: 16 }}>
               <h3>Variance commentary</h3>
+              {commentErr && <Notice tone="bad">{commentErr}</Notice>}
               <ul className="timeline">
                 {comments.map((c) => (
                   <li key={c.id}>
-                    <strong>{accounts.data?.find((a) => a.id === c.account_id)?.name ?? 'General'}</strong>{' '}
-                    {c.visibility === 'internal' && <StatusBadge status="draft" label="internal" />} {c.status === 'draft' && <StatusBadge status="draft" />}
+                    <div className="spread">
+                      <span>
+                        <strong>{accounts.data?.find((a) => a.id === c.account_id)?.name ?? 'General'}</strong>{' '}
+                        {c.visibility === 'internal' && <StatusBadge status="draft" label="internal" />} {c.status === 'draft' && <StatusBadge status="draft" />}
+                      </span>
+                      {can('commentary.edit', propertyId) && c.status === 'draft' && (
+                        <span className="row" style={{ gap: 4 }}>
+                          <button className="btn btn-sm" onClick={() => setEditing(c)}>Edit</button>
+                          <button className="btn btn-sm" onClick={() => void commentAction(() => supabase.from('management_commentary').update({ status: 'published', published_by: ctx?.user_id, published_at: new Date().toISOString() }).eq('id', c.id))}>Publish</button>
+                          <button className="btn btn-sm btn-ghost" onClick={() => confirmAction('Delete this draft comment?') && void commentAction(() => supabase.from('management_commentary').delete().eq('id', c.id))}>Delete</button>
+                        </span>
+                      )}
+                    </div>
                     <p style={{ margin: '4px 0 0' }}>{c.body}</p>
                   </li>
                 ))}
@@ -197,12 +243,24 @@ function VarianceView() {
           )}
         </Card>
       )}
+      {editing && (
+        <CommentModal
+          title="Edit draft comment"
+          initial={{ body: editing.body, visibility: editing.visibility as 'owner' | 'internal' }}
+          onClose={() => setEditing(null)}
+          onSave={async (body, visibility, publish) => {
+            unwrap(await supabase.from('management_commentary').update({ body, visibility, ...(publish ? { status: 'published', published_by: ctx?.user_id, published_at: new Date().toISOString() } : {}) }).eq('id', editing.id).select('id'));
+            await qc.invalidateQueries({ queryKey: ['variance'] });
+            setEditing(null);
+          }}
+        />
+      )}
       {commentFor && (
         <CommentModal
           title={`Variance comment — ${commentFor.label}`}
           onClose={() => setCommentFor(null)}
           onSave={async (body, visibility, publish) => {
-            unwrap(await supabase.from('management_commentary').insert({ company_id: company.company_id, property_id: propertyId, period_month: `${month}-01`, section: 'variance', account_id: commentFor.accountId, body, visibility, status: publish ? 'published' : 'draft', published_at: publish ? new Date().toISOString() : null }).select('id'));
+            unwrap(await supabase.from('management_commentary').insert({ company_id: company.company_id, property_id: propertyId, period_month: `${month}-01`, section: 'variance', account_id: commentFor.accountId, body, visibility, status: publish ? 'published' : 'draft', created_by: ctx?.user_id, published_by: publish ? ctx?.user_id : null, published_at: publish ? new Date().toISOString() : null }).select('id'));
             await qc.invalidateQueries({ queryKey: ['variance'] });
             setCommentFor(null);
           }}
@@ -212,19 +270,30 @@ function VarianceView() {
   );
 }
 
-export function CommentModal({ title, onClose, onSave }: { title: string; onClose: () => void; onSave: (body: string, visibility: 'owner' | 'internal', publish: boolean) => Promise<void> }) {
-  const [body, setBody] = useState('');
-  const [visibility, setVisibility] = useState<'owner' | 'internal'>('owner');
+export function CommentModal({ title, onClose, onSave, initial }: { title: string; onClose: () => void; onSave: (body: string, visibility: 'owner' | 'internal', publish: boolean) => Promise<void>; initial?: { body: string; visibility: 'owner' | 'internal' } }) {
+  const [body, setBody] = useState(initial?.body ?? '');
+  const [visibility, setVisibility] = useState<'owner' | 'internal'>(initial?.visibility ?? 'owner');
   const [err, setErr] = useState<string | null>(null);
-  const save = (publish: boolean) => onSave(body, visibility, publish).catch((e) => setErr(errorMessage(e)));
+  const [busy, setBusy] = useState(false);
+  const save = async (publish: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await onSave(body, visibility, publish);
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Modal title={title} onClose={onClose}>
       {err && <Notice tone="bad">{err}</Notice>}
       <label className="field">Comment<textarea value={body} onChange={(e) => setBody(e.target.value)} /></label>
       <label className="field">Visibility<select value={visibility} onChange={(e) => setVisibility(e.target.value as 'owner' | 'internal')}><option value="owner">Owner-facing</option><option value="internal">Internal only</option></select></label>
       <div className="row">
-        <button className="btn" disabled={!body.trim()} onClick={() => save(false)}>Save draft</button>
-        <button className="btn btn-primary" disabled={!body.trim()} onClick={() => save(true)}>Publish</button>
+        <button className="btn" disabled={busy || !body.trim()} onClick={() => void save(false)}>Save draft</button>
+        <button className="btn btn-primary" disabled={busy || !body.trim()} onClick={() => void save(true)}>Publish</button>
       </div>
     </Modal>
   );
@@ -270,17 +339,27 @@ function NewBudget({ onClose, existing }: { onClose: () => void; existing: Array
   const create = useRpc('create_budget_version');
   const eligible = properties.filter((p) => can('budgets.edit', p.id));
   const [pid, setPid] = useState(eligible[0]?.id ?? '');
-  const [fy, setFy] = useState(new Date().getFullYear() + 1);
+  const [fy, setFy] = useState(String(new Date().getFullYear() + 1));
+  const fyNum = Number(fy);
+  const fyError = !Number.isInteger(fyNum) || fyNum < 2000 || fyNum > 2100 ? 'Enter a fiscal year between 2000 and 2100.' : null;
+  const go = async () => {
+    try {
+      const id = await create.mutateAsync({ p_property_id: pid, p_fiscal_year: fyNum, p_name: name, p_copy_from: copy || null });
+      navigate(`/financials/budgets/${id}`);
+    } catch {
+      /* shown above */
+    }
+  };
   const [name, setName] = useState('');
   const [copy, setCopy] = useState('');
   return (
     <Modal title="New budget version" onClose={onClose}>
       {create.error && <Notice tone="bad">{errorMessage(create.error)}</Notice>}
       <label className="field">Property<select value={pid} onChange={(e) => setPid(e.target.value)}>{eligible.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-      <label className="field">Fiscal year<input type="number" min={2000} max={2100} value={fy} onChange={(e) => setFy(Number(e.target.value))} /></label>
+      <label className="field">Fiscal year<input type="number" min={2000} max={2100} step={1} value={fy} onChange={(e) => setFy(e.target.value)} />{fyError && <span className="field-error">{fyError}</span>}</label>
       <label className="field">Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder={`FY${fy} Operating budget`} /></label>
       <label className="field">Copy lines from<select value={copy} onChange={(e) => setCopy(e.target.value)}><option value="">— start empty —</option>{existing.filter((v) => v.property_id === pid).map((v) => <option key={v.id} value={v.id}>FY{v.fiscal_year} v{v.version_number} {v.name}</option>)}</select></label>
-      <button className="btn btn-primary" disabled={!pid} onClick={async () => { const id = await create.mutateAsync({ p_property_id: pid, p_fiscal_year: fy, p_name: name, p_copy_from: copy || null }); navigate(`/financials/budgets/${id}`); }}>Create draft</button>
+      <button className="btn btn-primary" disabled={!pid || !!fyError || create.isPending} onClick={() => void go()}>{create.isPending ? 'Creating…' : 'Create draft'}</button>
     </Modal>
   );
 }
@@ -296,33 +375,79 @@ function Mappings() {
   });
   const [form, setForm] = useState({ code: '', name: '', account: '', property: '' });
   const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ id: string; account: string } | null>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['mappings'] });
   const add = async () => {
     setErr(null);
-    const { error } = await supabase.from('source_account_mappings').insert({ company_id: company.company_id, property_id: form.property || null, source_account_code: form.code.trim(), source_account_name: form.name || null, account_id: form.account });
-    if (error) setErr(error.message);
+    const code = form.code.trim();
+    if (!code) return setErr('Enter a source account code.');
+    const { error } = await supabase.from('source_account_mappings').insert({ company_id: company.company_id, property_id: form.property || null, source_account_code: code, source_account_name: form.name.trim() || null, account_id: form.account });
+    if (error) setErr(error.code === '23505' ? `Code ${code} is already mapped${form.property ? ' for that property' : ''}. Edit the existing mapping instead.` : dbErrorMessage(error));
     else {
       setForm({ code: '', name: '', account: '', property: '' });
-      await qc.invalidateQueries({ queryKey: ['mappings'] });
+      await refresh();
     }
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    setErr(null);
+    const { error } = await supabase.from('source_account_mappings').update({ account_id: editing.account }).eq('id', editing.id);
+    if (error) setErr(dbErrorMessage(error));
+    else setEditing(null);
+    await refresh();
+  };
+  const remove = async (id: string, code: string) => {
+    if (!confirmAction(`Delete the mapping for ${code}? Future imports with this code will be rejected until it is mapped again.`)) return;
+    setErr(null);
+    const { error } = await supabase.from('source_account_mappings').delete().eq('id', id);
+    if (error) setErr(dbErrorMessage(error));
+    await refresh();
   };
   return (
     <Card title="Source account mappings" flush>
-      <p className="small muted" style={{ padding: '0 16px' }}>Imported GL accounts are mapped to the company reporting structure. Original account codes and values are preserved on every line. Property-specific mappings override company defaults.</p>
+      <p className="small muted" style={{ padding: '0 16px' }}>Imported GL accounts are mapped to the company reporting structure. Original account codes and values are preserved on every line. Property-specific mappings override company defaults. Changing a mapping affects future imports only.</p>
       <div className="filter-bar" style={{ margin: '0 16px' }}>
         <label className="field">Source code<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} /></label>
         <label className="field">Source name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
         <label className="field">Reporting account<select value={form.account} onChange={(e) => setForm({ ...form, account: e.target.value })}><option value="">Select…</option>{accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}</select></label>
         <label className="field">Scope<select value={form.property} onChange={(e) => setForm({ ...form, property: e.target.value })}><option value="">All properties</option>{properties.map((p) => <option key={p.id} value={p.id}>{p.code}</option>)}</select></label>
-        <button className="btn btn-primary" disabled={!form.code || !form.account} onClick={add}>Add mapping</button>
+        <button className="btn btn-primary" disabled={!form.code.trim() || !form.account} onClick={() => void add()}>Add mapping</button>
       </div>
       {err && <div style={{ padding: 16 }}><Notice tone="bad">{err}</Notice></div>}
       <div className="table-wrap" style={{ marginTop: 12 }}>
         <table className="data">
-          <thead><tr><th>Source code</th><th>Source name</th><th>Reporting account</th><th>Scope</th></tr></thead>
+          <thead><tr><th>Source code</th><th>Source name</th><th>Reporting account</th><th>Scope</th><th /></tr></thead>
           <tbody>
             {(q.data ?? []).map((m) => {
               const a = accounts.data?.find((x) => x.id === m.account_id);
-              return <tr key={m.id}><td>{m.source_account_code}</td><td>{m.source_account_name}</td><td>{a ? `${a.code} — ${a.name}` : '—'}</td><td>{m.property_id ? properties.find((p) => p.id === m.property_id)?.code : 'All properties'}</td></tr>;
+              const isEditing = editing?.id === m.id;
+              return (
+                <tr key={m.id}>
+                  <td>{m.source_account_code}</td>
+                  <td>{m.source_account_name}</td>
+                  <td>
+                    {isEditing ? (
+                      <select aria-label={`Reporting account for ${m.source_account_code}`} value={editing.account} onChange={(e) => setEditing({ id: m.id, account: e.target.value })}>
+                        {accounts.data?.map((x) => <option key={x.id} value={x.id}>{x.code} — {x.name}</option>)}
+                      </select>
+                    ) : a ? `${a.code} — ${a.name}` : '—'}
+                  </td>
+                  <td>{m.property_id ? properties.find((p) => p.id === m.property_id)?.code : 'All properties'}</td>
+                  <td className="row" style={{ gap: 4 }}>
+                    {isEditing ? (
+                      <>
+                        <button className="btn btn-sm btn-primary" onClick={() => void saveEdit()}>Save</button>
+                        <button className="btn btn-sm btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn btn-sm" onClick={() => setEditing({ id: m.id, account: m.account_id })}>Edit</button>
+                        <button className="btn btn-sm btn-ghost" onClick={() => void remove(m.id, m.source_account_code)}>Delete</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
             })}
           </tbody>
         </table>
@@ -330,4 +455,3 @@ function Mappings() {
     </Card>
   );
 }
-

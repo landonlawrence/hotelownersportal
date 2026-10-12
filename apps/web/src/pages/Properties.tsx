@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase, unwrap } from '../lib/supabase';
 import { usePortal, useCompany } from '../state/portal';
-import { Card, Empty, PageHeader, StatusBadge, fmtDate } from '../components/ui';
+import { Card, Empty, Loading, PageHeader, StatusBadge, fmtDate, fmtExclusiveEnd } from '../components/ui';
 import { OverviewPage } from './Overview';
 import { Icon } from '../components/icons';
 
@@ -53,8 +53,15 @@ export function PropertiesPage() {
 
 export function PropertyDetailPage() {
   const { id } = useParams();
-  const { properties } = usePortal();
+  const { properties, ctx, company, setCompanyId } = usePortal();
   const property = properties.find((p) => p.id === id);
+  // Deep links may point at a property in another of the user's companies (RLS decides visibility).
+  const elsewhere = useQuery({
+    queryKey: ['property-elsewhere', id, company?.company_id],
+    enabled: !property && !!id && properties !== undefined,
+    queryFn: async () => unwrap(await supabase.from('properties').select('id, company_id, name').eq('id', id!).maybeSingle()) as { id: string; company_id: string; name: string } | null,
+  });
+  const otherCompany = elsewhere.data && elsewhere.data.company_id !== company?.company_id ? ctx?.companies.find((c) => c.company_id === elsewhere.data!.company_id) : undefined;
   const ownership = useQuery({
     queryKey: ['ownership', id],
     enabled: !!property,
@@ -70,7 +77,21 @@ export function PropertyDetailPage() {
     enabled: !!property,
     queryFn: async () => unwrap(await supabase.from('property_reporting_config').select('ooo_treatment, comp_treatment').eq('property_id', id!).maybeSingle()) as { ooo_treatment: string; comp_treatment: string } | null,
   });
-  if (!property) return <Empty title="Property not found">It may not exist, or you may not have access to it.</Empty>;
+  if (!property) {
+    if (otherCompany) {
+      return (
+        <Card>
+          <Empty title={`${elsewhere.data!.name} belongs to ${otherCompany.company_name}`}>
+            <span className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
+              <button className="btn btn-primary" onClick={() => setCompanyId(otherCompany.company_id)}>Switch to {otherCompany.company_name}</button>
+            </span>
+          </Empty>
+        </Card>
+      );
+    }
+    if (elsewhere.isLoading) return <Loading />;
+    return <Empty title="Property not found">It may not exist, or you may not have access to it.</Empty>;
+  }
   return (
     <div className="stack">
       <div className="small"><Link to="/properties">← Properties</Link></div>
@@ -81,7 +102,7 @@ export function PropertyDetailPage() {
             <thead><tr><th>From</th><th>To</th><th className="num">Rooms</th><th>Reason</th></tr></thead>
             <tbody>
               {(inventory.data ?? []).map((r) => (
-                <tr key={r.effective_from}><td>{fmtDate(r.effective_from)}</td><td>{r.effective_to ? fmtDate(r.effective_to) : 'Current'}</td><td className="num">{r.room_count}</td><td>{r.reason}</td></tr>
+                <tr key={r.effective_from}><td>{fmtDate(r.effective_from)}</td><td>{r.effective_to ? fmtExclusiveEnd(r.effective_to) : 'Current'}</td><td className="num">{r.room_count}</td><td>{r.reason}</td></tr>
               ))}
             </tbody>
           </table>

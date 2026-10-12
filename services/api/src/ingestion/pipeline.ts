@@ -13,6 +13,7 @@
 import {
   getParser,
   hasErrors,
+  tablePropertyScope,
   localToday,
   type ParseContext,
   type PropertyRef,
@@ -82,18 +83,19 @@ export async function buildContext(svc: SupabaseClient, run: ImportRun): Promise
   }
 
   const propertyByCode = new Map<string, PropertyRef>();
-  let routed = false;
+  // Route-authorized runs (email/SFTP: no requesting user) resolve property codes
+  // only through the source's mappings — with no mappings every row is unmapped.
+  // Manual uploads fall back to internal codes when the chosen source has none.
+  let routed = run.source_id !== null && run.requested_by === null;
   if (run.source_id) {
     const mappings = await must<Array<{ external_code: string; property_id: string }>>(
       svc.from('ingestion_property_mappings').select('external_code, property_id').eq('source_id', run.source_id).eq('company_id', run.company_id),
       'load mappings',
     );
-    if (mappings.length > 0) {
-      routed = true;
-      for (const m of mappings) {
-        const ref = refs.get(m.property_id);
-        if (ref) propertyByCode.set(m.external_code, ref);
-      }
+    if (mappings.length > 0) routed = true;
+    for (const m of mappings) {
+      const ref = refs.get(m.property_id);
+      if (ref) propertyByCode.set(m.external_code.toUpperCase(), ref);
     }
   }
   if (!routed) {
@@ -110,6 +112,7 @@ export async function buildContext(svc: SupabaseClient, run: ImportRun): Promise
   );
   return {
     propertyByCode,
+    routed,
     todayFor: (p) => localToday(p.timeZone),
     reportingAccounts: new Map(accounts.map((a) => [a.code, a])),
     accountMapping: (code, propertyId) =>
@@ -198,16 +201,20 @@ export async function processImportRun(importRunId: string): Promise<{ status: s
 
     let records: Array<{ propertyId: string }> = [];
     let result: Awaited<ReturnType<typeof parser.parse>> | null = null;
+    // Every property the file mentions (valid or invalid rows); an unresolvable
+    // code restricts the run to ingestion managers and the requester.
+    let scope: { propertyIds: string[]; unresolved: boolean } = { propertyIds: [], unresolved: true };
     if (!hasErrors(issues) && kind) {
       const bytes = await storage().get(cfg.SOURCE_FILES_BUCKET, file.storage_key);
       let table;
       try {
         table = await toTable(bytes, kind);
       } catch (e) {
-        issues.push({ severity: 'error', row: null, field: null, code: 'unreadable_file', message: `File could not be read: ${(e as Error).message}` });
+        issues.push({ severity: 'error', row: null, field: null, code: 'unreadable_file', message: unreadableMessage(kind, e) });
       }
       if (table) {
         const ctx = await buildContext(svc, run);
+        scope = tablePropertyScope(table, ctx.propertyByCode);
         result = parser.parse(table, ctx);
         issues.push(...result.issues);
         records = result.records as Array<{ propertyId: string }>;
@@ -234,7 +241,7 @@ export async function processImportRun(importRunId: string): Promise<{ status: s
       rows_valid: result?.records.length ?? 0,
       period_start: result?.periodStart ?? null,
       period_end: result?.periodEnd ?? null,
-      property_ids: propertyIds,
+      property_ids: scope.unresolved ? [] : [...new Set([...scope.propertyIds, ...propertyIds])],
     };
     if (errors > 0 || !result) {
       await finish(svc, run.id, { ...base, status: 'rejected' });
@@ -295,6 +302,14 @@ export async function processImportRun(importRunId: string): Promise<{ status: s
       .eq('id', run.id);
     throw e;
   }
+}
+
+function unreadableMessage(kind: string, e: unknown): string {
+  if (kind === 'xlsx') return 'This file is not a valid Excel workbook (.xlsx). Save it from Excel as .xlsx or export it as CSV and upload again.';
+  const detail = (e as Error)?.message ?? '';
+  return /quote/i.test(detail)
+    ? 'This CSV file could not be read: a quoted value is not closed. Check the file in a spreadsheet app and export it again.'
+    : 'This CSV file could not be read. Export it again as comma-separated values (UTF-8) and upload it.';
 }
 
 async function resolveAlerts(svc: SupabaseClient, companyId: string, records: Array<{ propertyId: string; businessDate: string }>) {

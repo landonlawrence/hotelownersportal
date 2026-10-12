@@ -9,5 +9,6 @@ export async function login(page: Page, email: string, base = HV) {
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByRole('navigation', { name: 'Main navigation' }).or(page.locator('aside.sidebar'))).toBeVisible();
+  // The top bar is visible at every width (the sidebar is an off-canvas drawer on phones).
+  await expect(page.locator('header.topbar')).toBeVisible();
 }

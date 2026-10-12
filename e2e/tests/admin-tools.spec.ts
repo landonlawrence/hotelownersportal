@@ -60,3 +60,36 @@ test('owner downloads a branded statement PDF and turns off an email notificatio
   await page.reload();
   await expect(page.getByLabel('Email: Owner report published')).not.toBeChecked();
 });
+
+test('dialogs close on Escape and return focus; admin tabs support arrow keys', async ({ page }) => {
+  await login(page, 'admin@harborview.example');
+  await page.getByRole('link', { name: 'Administration' }).click();
+  const users = page.getByRole('tab', { name: 'Users & access' });
+  await users.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Invitations' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: 'Invitations' })).toBeFocused();
+  await page.getByRole('tab', { name: 'Properties' }).click();
+  const add = page.getByRole('button', { name: 'Add property' });
+  await add.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog').getByLabel('Code (unique, e.g. HV-BOS)')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(add).toBeFocused();
+});
+
+test('phone width: administration tabs and import detail do not scroll sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, 'admin@harborview.example');
+  await page.goto('/admin?tab=branding');
+  await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.goto('/admin?tab=users');
+  await expect(page.getByRole('tab', { name: 'Users & access' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.goto('/imports');
+  await page.locator('table.data a[href^="/imports/"]').first().click();
+  await expect(page.getByText('File fingerprint')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});

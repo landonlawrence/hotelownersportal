@@ -6,10 +6,12 @@ import { supabase, unwrap } from '../lib/supabase';
 import { downloadDocumentVersion, downloadFromApi } from '../lib/api';
 import { useRpc } from '../lib/hooks';
 import { buildStatement, type Account } from '@hop/core';
+import { DownloadButton } from '../components/DownloadButton';
 import { usePortal, useCompany } from '../state/portal';
-import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';
+import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, currentMonthValue, errorMessage, fmtDate, fmtMonth, lastClosedMonthValue } from '../components/ui';
 import { KpiCard } from '../components/kpi';
 import { StatementTable } from '../components/StatementTable';
+import { MfaLockedNotice } from '../components/RequirePermission';
 
 export function ReportsPage() {
   const { properties, canAny, can } = usePortal();
@@ -21,10 +23,27 @@ export function ReportsPage() {
     queryFn: async () => unwrap(await supabase.from('reporting_packages').select('id, property_id, period_month, title, revision, status, published_at, correction_reason').eq('company_id', company.company_id).order('period_month', { ascending: false }).order('revision', { ascending: false })) as Array<{ id: string; property_id: string; period_month: string; title: string; revision: number; status: string; published_at: string | null; correction_reason: string | null }>,
   });
   const create = useRpc('create_reporting_package');
-  const [f, setF] = useState({ property: properties.find((p) => can('reports.edit', p.id))?.id ?? '', month: '' });
+  const editable = properties.filter((p) => can('reports.edit', p.id));
+  // Properties and permissions may still be loading at mount: default the property when the dialog opens.
+  const [f, setF] = useState({ property: '', month: lastClosedMonthValue() });
+  const openNew = () => {
+    setF((x) => ({ ...x, property: x.property && editable.some((p) => p.id === x.property) ? x.property : editable[0]?.id ?? '' }));
+    setCreating(true);
+  };
+  const maxMonth = currentMonthValue();
+  const monthError = f.month && f.month > maxMonth ? 'Owner packages can’t be created for a future month.' : null;
+  const createPackage = async () => {
+    try {
+      const id = await create.mutateAsync({ p_property_id: f.property, p_period_month: `${f.month}-01`, p_title: null });
+      navigate(`/reports/${id}`);
+    } catch {
+      /* shown in the dialog */
+    }
+  };
   return (
     <div className="stack">
-      <PageHeader title="Owner reports" subtitle="Monthly reporting packages: performance, budget variances, financial statements, commentary, CapEx and supporting documents." actions={canAny('reports.edit') && <button className="btn btn-primary" onClick={() => setCreating(true)}>New package</button>} />
+      <PageHeader title="Owner reports" subtitle="Monthly reporting packages: performance, budget variances, financial statements, commentary, CapEx and supporting documents." actions={canAny('reports.edit') && <button className="btn btn-primary" onClick={openNew}>New package</button>} />
+      <MfaLockedNotice perms={['reports.edit', 'reports.publish']}>Draft packages, new packages and publishing need a 2FA-verified session.</MfaLockedNotice>
       <Card flush>
         {q.isLoading ? <Loading /> : q.error ? <ErrorState error={q.error} /> : (q.data ?? []).length === 0 ? <Empty title="No reports published yet" /> : (
           <div className="table-wrap">
@@ -48,10 +67,10 @@ export function ReportsPage() {
       {creating && (
         <Modal title="New reporting package" onClose={() => setCreating(false)}>
           {create.error && <Notice tone="bad">{errorMessage(create.error)}</Notice>}
-          <label className="field">Property<select value={f.property} onChange={(e) => setF({ ...f, property: e.target.value })}>{properties.filter((p) => can('reports.edit', p.id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-          <label className="field">Period<input type="month" value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} /></label>
+          <label className="field">Property<select value={f.property} onChange={(e) => setF({ ...f, property: e.target.value })}>{!f.property && <option value="">Select…</option>}{editable.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+          <label className="field">Period<input type="month" max={maxMonth} value={f.month} onChange={(e) => setF({ ...f, month: e.target.value })} />{monthError && <span className="field-error">{monthError}</span>}</label>
           <p className="small muted">The package includes the published financial statement for the period (if any), performance, budget variances, owner-facing commentary and CapEx. A snapshot is frozen when it is published.</p>
-          <button className="btn btn-primary" disabled={!f.property || !f.month} onClick={async () => { const id = await create.mutateAsync({ p_property_id: f.property, p_period_month: `${f.month}-01`, p_title: null }); navigate(`/reports/${id}`); }}>Create draft</button>
+          <button className="btn btn-primary" disabled={!f.property || !f.month || !!monthError || create.isPending} onClick={() => void createPackage()}>{create.isPending ? 'Creating…' : 'Create draft'}</button>
         </Modal>
       )}
     </div>
@@ -85,6 +104,12 @@ export function ReportPackagePage() {
     queryFn: async () => unwrap(await supabase.from('documents').select('id, title, current_version_id').in('id', q.data!.snapshot!.documents!.map((d) => d.document_id))) as Array<{ id: string; title: string; current_version_id: string | null }>,
   });
   const [action, setAction] = useState<null | 'publish' | 'revise'>(null);
+  const superseding = useQuery({
+    queryKey: ['package-current', q.data?.package.property_id, q.data?.package.period_month],
+    enabled: q.data?.package.status === 'superseded',
+    queryFn: async () =>
+      unwrap(await supabase.from('reporting_packages').select('id, revision').eq('property_id', q.data!.package.property_id).eq('period_month', q.data!.package.period_month).eq('status', 'published').maybeSingle()) as { id: string; revision: number } | null,
+  });
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorState error={q.error} />;
   if (!q.data) return <Empty title="Report not found">It may not exist, may not be published yet, or you may not have access.</Empty>;
@@ -101,7 +126,7 @@ export function ReportPackagePage() {
         subtitle={<>{pkg.title} · revision {pkg.revision} · <StatusBadge status={pkg.status} />{pkg.published_at && ` · published ${fmtDate(pkg.published_at)}`}</>}
         actions={
           <>
-            <button className="btn" onClick={() => downloadFromApi(`/exports/packages/${pkg.id}.pdf`, 'owner-report.pdf')}>Download PDF</button>
+            <DownloadButton label="Download PDF" busyLabel="Generating PDF…" run={() => downloadFromApi(`/exports/packages/${pkg.id}.pdf`, 'owner-report.pdf')} />
             {['draft', 'in_review'].includes(pkg.status) && can('reports.publish', pkg.property_id) && <button className="btn btn-primary" onClick={() => setAction('publish')}>Publish to owners</button>}
             {pkg.status === 'published' && can('reports.edit', pkg.property_id) && <button className="btn" onClick={() => setAction('revise')}>Create revision</button>}
           </>
@@ -109,7 +134,12 @@ export function ReportPackagePage() {
       />
       {q.data.is_preview && <Notice tone="warn">Preview — this draft is not visible to owners. Figures will be frozen when published.</Notice>}
       {pkg.correction_reason && <Notice tone="info">Revision note: {pkg.correction_reason}</Notice>}
-      {pkg.status === 'superseded' && <Notice tone="info">A revised version of this report has been published.</Notice>}
+      {pkg.status === 'superseded' && (
+        <Notice tone="info">
+          A revised version of this report has been published.{' '}
+          {superseding.data && <Link to={`/reports/${superseding.data.id}`}>View the current version (revision {superseding.data.revision})</Link>}
+        </Notice>
+      )}
       {s?.performance && (
         <Card title="Performance summary" actions={<span className="small muted">Provisional daily figures · {s.performance.reported_days}/{s.performance.expected_days} days reported</span>}>
           <div className="grid grid-kpi">
@@ -155,7 +185,7 @@ export function ReportPackagePage() {
       )}
       {(docs.data ?? []).length > 0 && (
         <Card title="Supporting documents">
-          <ul>{docs.data!.map((d) => <li key={d.id}>{d.current_version_id ? <button className="btn btn-ghost btn-sm" onClick={() => downloadDocumentVersion(d.current_version_id!)}>{d.title}</button> : d.title}</li>)}</ul>
+          <ul>{docs.data!.map((d) => <li key={d.id}>{d.current_version_id ? <DownloadButton className="btn btn-ghost btn-sm" label={d.title} run={() => downloadDocumentVersion(d.current_version_id!)} /> : d.title}</li>)}</ul>
         </Card>
       )}
       {s?.definitions && <p className="small muted">Definitions: {Object.entries(s.definitions).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(' · ')}. Occupancy {formatPercent(cur.occupancyPct)} is based on reported days only.</p>}

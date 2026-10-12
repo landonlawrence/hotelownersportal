@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { usePortal } from '../state/portal';
@@ -7,7 +7,7 @@ import { Notice } from '../components/ui';
 
 /** Invitation links carry the token in the URL fragment so it never reaches server logs. */
 export function AcceptInvitePage() {
-  const { session, hostBranding } = usePortal();
+  const { session, hostBranding, setCompanyId } = usePortal();
   const [token] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') ?? '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -19,23 +19,32 @@ export function AcceptInvitePage() {
 
   useEffect(() => {
     if (!session || !token || done) return;
-    supabase.rpc('accept_invitation', { p_token: token }).then(async ({ error: err }) => {
-      if (err) return setError(err.message);
+    supabase.rpc('accept_invitation', { p_token: token }).then(async ({ data, error: err }) => {
+      if (err) return setError(err.code === '42501' ? 'wrong_email' : err.code === '22023' ? 'invalid' : err.message);
       setDone(true);
-      // Make sure the new membership is loaded before entering the portal.
+      const { data: m } = await supabase.from('company_memberships').select('company_id').eq('id', data as string).maybeSingle();
+      // Make sure the new membership is loaded before entering the portal, then open the company just joined.
       await qc.resetQueries({ queryKey: ['my-context'] });
       await qc.refetchQueries({ queryKey: ['my-context'] });
+      if (m?.company_id) setCompanyId(m.company_id as string);
       await qc.invalidateQueries();
       navigate('/');
     });
-  }, [session, token, done, navigate, qc]);
+  }, [session, token, done, navigate, qc, setCompanyId]);
+
+  const signOutAndRetry = async () => {
+    await supabase.auth.signOut();
+    setError(null);
+    setDone(false);
+    setMode('signin');
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     const fn = mode === 'signup' ? supabase.auth.signUp({ email, password }) : supabase.auth.signInWithPassword({ email, password });
     const { error: err } = await fn;
-    if (err) setError(err.message);
+    if (err) setError(/already registered|already exists/i.test(err.message) ? 'An account with this email already exists — choose “I already have an account” and sign in.' : /invalid login/i.test(err.message) ? 'Email or password is incorrect.' : err.message);
   };
 
   return (
@@ -48,7 +57,20 @@ export function AcceptInvitePage() {
       <section className="auth-panel">
         <div className="auth-form">
           {!token && <Notice tone="bad">This invitation link is incomplete.</Notice>}
-          {error && <Notice tone="bad">{error}</Notice>}
+          {error === 'invalid' && (
+            <>
+              <Notice tone="bad">This invitation has already been used or has expired. Ask your administrator for a new one.</Notice>
+              <Link className="btn" to="/">Go to the portal</Link>
+            </>
+          )}
+          {error === 'wrong_email' && (
+            <>
+              <Notice tone="bad">This invitation was sent to a different email address. You’re signed in as {session?.user.email}.</Notice>
+              <button className="btn btn-primary" onClick={() => void signOutAndRetry()}>Sign out and use another account</button>
+              <Link className="btn" to="/">Go to the portal</Link>
+            </>
+          )}
+          {error && error !== 'invalid' && error !== 'wrong_email' && <Notice tone="bad">{error}</Notice>}
           {done && <Notice tone="good">Invitation accepted. Redirecting…</Notice>}
           {!session && token && (
             <form className="stack" onSubmit={submit}>

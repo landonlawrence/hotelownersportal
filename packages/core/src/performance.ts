@@ -3,7 +3,7 @@
  * into KPI results. Used by the web app, CSV exports and reporting packages so
  * every surface computes identical numbers.
  */
-import { daysInclusive, type DateRange, type IsoDate } from './dates.js';
+import { addDays, daysInclusive, minIsoDate, type DateRange, type IsoDate } from './dates.js';
 import { expectedDaysForProperty, portfolioRollup, type KpiComponents, type PortfolioResult, type PropertyPeriodSums } from './kpi.js';
 
 export interface RollupRow {
@@ -61,6 +61,27 @@ export interface SeriesPoint {
   components: KpiComponents | null;
   reportedDays: number;
   expectedDays: number;
+  /** Fewer property-days reported than expected (not all hotels reported). */
+  partial: boolean;
+}
+
+/**
+ * The part of `range` that has elapsed by `asOf` (inclusive). Used so an
+ * in-progress period is compared like-for-like with the same elapsed days of
+ * the prior year and budget. `inProgress` is true when the range was cut short.
+ */
+export function comparableRange(range: DateRange, asOf: IsoDate): DateRange & { inProgress: boolean } {
+  const to = minIsoDate(range.to, asOf);
+  if (to < range.from) return { from: range.from, to: addDays(range.from, -1), inProgress: true };
+  return { from: range.from, to, inProgress: to < range.to };
+}
+
+/** Property-days expected in a bucket (operating properties only, never beyond `asOf`). */
+export function expectedDaysInRange(properties: PropertyInfo[], range: DateRange, asOf: IsoDate): number {
+  return properties.reduce(
+    (acc, p) => acc + (NOT_EXPECTED.has(p.status ?? '') ? 0 : expectedDaysForProperty(range, { openedOn: p.openedOn ?? null, asOf })),
+    0,
+  );
 }
 
 /** Combine per-property bucket rows into a portfolio time series (summed components per bucket). */
@@ -73,7 +94,8 @@ export function portfolioSeries(rows: RollupRow[], buckets: string[], expectedDa
   }
   return buckets.map((b) => {
     const list = grouped.get(b) ?? [];
-    if (list.length === 0) return { bucket: b, components: null, reportedDays: 0, expectedDays: expectedDaysPerBucket(b) };
+    const expected = expectedDaysPerBucket(b);
+    if (list.length === 0) return { bucket: b, components: null, reportedDays: 0, expectedDays: expected, partial: expected > 0 };
     let totalMissing = false;
     const c = list.reduce<KpiComponents>(
       (acc, r) => {
@@ -88,11 +110,13 @@ export function portfolioSeries(rows: RollupRow[], buckets: string[], expectedDa
       },
       { availableRoomNights: 0, roomsSold: 0, roomRevenue: 0, totalRevenue: 0 },
     );
+    const reported = list.reduce((a, r) => a + r.reported_days, 0);
     return {
       bucket: b,
       components: totalMissing ? { ...c, totalRevenue: null } : c,
-      reportedDays: list.reduce((a, r) => a + r.reported_days, 0),
-      expectedDays: expectedDaysPerBucket(b),
+      reportedDays: reported,
+      expectedDays: expected,
+      partial: reported < expected,
     };
   });
 }

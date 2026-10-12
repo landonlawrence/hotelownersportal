@@ -50,6 +50,8 @@ const EMAIL_KINDS: Array<{ kind: string; label: string; perm?: string }> = [
   { kind: 'budget_approved', label: 'Budget approved', perm: 'budgets.view' },
   { kind: 'capex_approval_requested', label: 'CapEx approval requested', perm: 'capex.approve' },
   { kind: 'financial_review_requested', label: 'Financial statement ready for review', perm: 'financials.publish' },
+  { kind: 'capex_request_decided', label: 'Your CapEx request was approved or rejected', perm: 'capex.edit' },
+  { kind: 'support_session_opened', label: 'Platform support access opened', perm: 'admin.users' },
 ];
 
 function EmailPreferences() {

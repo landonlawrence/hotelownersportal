@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PermissionSet, type Permission } from '@hop/core';
@@ -30,6 +30,8 @@ export interface PortalContextData {
   aal: string;
   is_platform_admin: boolean;
   cross_company_rollups_enabled: boolean;
+  /** Open support sessions that need a 2FA-verified session before they grant access. */
+  support_sessions_awaiting_mfa?: Array<{ support_session_id: string; company_id: string; company_name: string; support_expires_at: string }>;
   companies: CompanyContext[];
 }
 
@@ -53,9 +55,18 @@ interface PortalState {
   hostBranding: HostBranding | null | undefined;
   ctx: PortalContextData | undefined;
   ctxLoading: boolean;
+  /** my_context() failed (network, revoked or corrupted session). */
+  ctxError: unknown;
+  refetchCtx: () => Promise<unknown>;
   company: CompanyContext | undefined;
   setCompanyId: (id: string) => void;
   properties: Property[];
+  propertiesLoading: boolean;
+  /** The properties query failed: never treat this as "no access". */
+  propertiesError: unknown;
+  refetchProperties: () => Promise<unknown>;
+  /** Re-check access (throttled): called on navigation so revoked users see it quickly. */
+  revalidate: () => void;
   perms: PermissionSet;
   can: (perm: Permission, propertyId?: string) => boolean;
   canAny: (perm: Permission) => boolean;
@@ -108,6 +119,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const ctxQ = useQuery({
     queryKey: ['my-context', session?.user.id, session?.access_token ? 'auth' : 'anon'],
     enabled: !!session,
+    refetchOnWindowFocus: true,
     queryFn: async () => unwrap(await supabase.rpc('my_context')) as PortalContextData,
   });
 
@@ -125,6 +137,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
   const propsQ = useQuery({
     queryKey: ['properties', company?.company_id],
     enabled: !!company,
+    refetchOnWindowFocus: true,
     queryFn: async () =>
       unwrap(
         await supabase
@@ -149,12 +162,22 @@ export function PortalProvider({ children }: { children: ReactNode }) {
     applyTheme(toTheme(company?.branding ?? hostQ.data ?? null));
   }, [company, hostQ.data]);
 
+  const lastRevalidate = useRef(Date.now());
+  const revalidate = useCallback(() => {
+    if (Date.now() - lastRevalidate.current < 15_000) return;
+    lastRevalidate.current = Date.now();
+    void qc.invalidateQueries({ queryKey: ['my-context'] });
+    void qc.invalidateQueries({ queryKey: ['properties'] });
+  }, [qc]);
+
   const value: PortalState = {
     session,
     sessionLoading,
     hostBranding: hostQ.data,
     ctx,
     ctxLoading: ctxQ.isLoading,
+    ctxError: ctxQ.error,
+    refetchCtx: () => ctxQ.refetch(),
     company,
     setCompanyId: (id) => {
       if (ctx) safeSet(storageKey(ctx.user_id), id);
@@ -163,6 +186,10 @@ export function PortalProvider({ children }: { children: ReactNode }) {
       qc.removeQueries({ predicate: (q) => !['my-context', 'host-branding'].includes(String(q.queryKey[0])) });
     },
     properties: propsQ.data ?? [],
+    propertiesLoading: propsQ.isLoading,
+    propertiesError: propsQ.error,
+    refetchProperties: () => propsQ.refetch(),
+    revalidate,
     perms,
     can: (perm, propertyId) => perms.has(perm, propertyId),
     canAny: (perm) => perms.any(perm) || (/^(admin|audit|ingestion)\./.test(perm) && perms.has(perm)),

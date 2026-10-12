@@ -1,7 +1,7 @@
 /**
  * Scheduled missing-report detection (EventBridge Scheduler, hourly).
  * Daily sources: yesterday's business date (property-local) must be loaded by
- * the source's local deadline. Monthly sources: last month's actuals by the
+ * the property's (or source's) local deadline. Monthly sources: last month's actuals by the
  * configured day. Alerts are de-duplicated and notify ingestion managers once.
  */
 import { addDays, localToday } from '@hop/core';
@@ -35,6 +35,8 @@ export async function checkMissingReports(now = new Date()): Promise<{ created: 
     let propertyIds = ((maps ?? []) as Array<{ property_id: string }>).map((m) => m.property_id);
     const { data: props } = await svc.from('properties').select('id, code, timezone, status').eq('company_id', s.company_id);
     const all = (props ?? []) as Array<{ id: string; code: string; timezone: string; status: string }>;
+    const { data: cfgRows } = await svc.from('property_reporting_config').select('property_id, daily_report_deadline_local, expects_daily_report').eq('company_id', s.company_id);
+    const cfg = new Map(((cfgRows ?? []) as Array<{ property_id: string; daily_report_deadline_local: string | null; expects_daily_report: boolean }>).map((c) => [c.property_id, c]));
     if (propertyIds.length === 0) propertyIds = all.filter((p) => p.status === 'active').map((p) => p.id);
 
     for (const p of all.filter((x) => propertyIds.includes(x.id))) {
@@ -42,7 +44,11 @@ export async function checkMissingReports(now = new Date()): Promise<{ created: 
       let missing = false;
       const today = localToday(p.timezone, now);
       if (s.expected_cadence === 'daily' && s.report_type === 'daily_performance') {
-        if (localTime(p.timezone, now) < (s.expected_by_local ?? '11:00').slice(0, 5)) continue;
+        const pc = cfg.get(p.id);
+        if (pc && pc.expects_daily_report === false) continue;
+        // The property's own deadline (Administration → Properties) wins over the source default.
+        const deadline = (pc?.daily_report_deadline_local ?? s.expected_by_local ?? '11:00').slice(0, 5);
+        if (localTime(p.timezone, now) < deadline) continue;
         expectedFor = addDays(today, -1);
         const { count } = await svc.from('daily_performance').select('id', { count: 'exact', head: true }).eq('property_id', p.id).eq('business_date', expectedFor);
         missing = (count ?? 0) === 0;

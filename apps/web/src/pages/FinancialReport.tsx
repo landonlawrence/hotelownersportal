@@ -6,8 +6,9 @@ import { supabase, unwrap } from '../lib/supabase';
 import { downloadDocumentVersion, downloadFromApi } from '../lib/api';
 import { buildStatement } from '@hop/core';
 import { useAccounts, useDisplayNames, useRpc } from '../lib/hooks';
+import { DownloadButton } from '../components/DownloadButton';
 import { usePortal, useCompany } from '../state/portal';
-import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';
+import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, confirmAction, dbErrorMessage, errorMessage, fmtDate, fmtMonth, parseAmount } from '../components/ui';
 import { StatementTable } from '../components/StatementTable';
 
 interface Report {
@@ -53,7 +54,7 @@ export function FinancialReportPage() {
     queryKey: ['publication-history', r?.property_id, r?.period_month],
     enabled: !!r,
     queryFn: async () => {
-      const revs = unwrap(await supabase.from('financial_reports').select('id, revision, status, correction_reason, published_at').eq('property_id', r!.property_id).eq('period_month', r!.period_month).order('revision')) as Array<{ id: string; revision: number; status: string; correction_reason: string | null; published_at: string | null }>;
+      const revs = unwrap(await supabase.from('financial_reports').select('id, revision, status, correction_reason, published_at, supersedes_id').eq('property_id', r!.property_id).eq('period_month', r!.period_month).order('revision')) as Array<{ id: string; revision: number; status: string; correction_reason: string | null; published_at: string | null; supersedes_id: string | null }>;
       const events = unwrap(await supabase.from('publication_events').select('id, entity_id, revision, from_status, to_status, comment, actor_user_id, created_at').eq('entity_type', 'financial_report').in('entity_id', revs.map((x) => x.id)).order('created_at')) as Array<{ id: number; entity_id: string; revision: number | null; from_status: string | null; to_status: string; comment: string | null; actor_user_id: string | null; created_at: string }>;
       return { revs, events };
     },
@@ -82,6 +83,8 @@ export function FinancialReportPage() {
   const property = properties.find((p) => p.id === r.property_id);
   const canEdit = can('financials.edit', r.property_id);
   const canPublish = can('financials.publish', r.property_id);
+  // Owners/investors only see publication outcomes (the database filters review history).
+  const canSeeDrafts = can('financials.view_draft', r.property_id);
   const currency = property?.currency ?? 'USD';
   const isLatestPublished = r.status === 'published';
 
@@ -93,9 +96,9 @@ export function FinancialReportPage() {
         subtitle={<>{r.title} · revision {r.revision} · <StatusBadge status={r.status} label={r.status === 'in_review' ? 'in review' : undefined} />{r.published_at && ` · published ${fmtDate(r.published_at)}`}</>}
         actions={
           <>
-            {pdf.data?.current_version_id && <button className="btn" onClick={() => downloadDocumentVersion(pdf.data!.current_version_id!)}>Published P&L (PDF)</button>}
-            <button className="btn" onClick={() => downloadFromApi(`/exports/financial-reports/${r.id}.pdf`, 'statement.pdf')}>Download PDF</button>
-            <button className="btn" onClick={() => downloadFromApi(`/exports/financial-reports/${r.id}.csv`, 'statement.csv')}>Export CSV</button>
+            {pdf.data?.current_version_id && <DownloadButton label="Published P&L (PDF)" run={() => downloadDocumentVersion(pdf.data!.current_version_id!)} />}
+            <DownloadButton label="Download PDF" busyLabel="Generating PDF…" run={() => downloadFromApi(`/exports/financial-reports/${r.id}.pdf`, 'statement.pdf')} />
+            <DownloadButton label="Export CSV" run={() => downloadFromApi(`/exports/financial-reports/${r.id}.csv`, 'statement.csv')} />
             {r.status === 'draft' && canEdit && <button className="btn btn-primary" onClick={() => setAction('submit')}>Submit for review</button>}
             {r.status === 'in_review' && canPublish && <button className="btn" onClick={() => setAction('return')}>Return to draft</button>}
             {r.status === 'in_review' && canPublish && <button className="btn btn-primary" onClick={() => setAction('publish')}>Publish</button>}
@@ -127,7 +130,7 @@ export function FinancialReportPage() {
           </div>
         )}
       </Card>
-      {r.status === 'draft' && canEdit && <DraftLineEditor reportId={r.id} companyId={r.company_id} propertyId={r.property_id} onSaved={() => qc.invalidateQueries({ queryKey: ['financial-report-lines', id] })} />}
+      {r.status === 'draft' && canEdit && <DraftLineEditor reportId={r.id} companyId={r.company_id} propertyId={r.property_id} lines={lines.data ?? []} onSaved={() => qc.invalidateQueries({ queryKey: ['financial-report-lines', id] })} />}
       <Card title="Publication history">
         {history.data && (
           <div className="grid grid-2">
@@ -145,10 +148,14 @@ export function FinancialReportPage() {
             <div>
               <h3>Events</h3>
               <ul className="timeline">
+                {history.data.events.length === 0 && <li className="muted">No publication events to show.</li>}
                 {history.data.events.map((e) => (
                   <li key={e.id}>
-                    <strong>{e.from_status ? `${e.from_status.replace('_', ' ')} → ` : ''}{e.to_status.replace('_', ' ')}</strong> <span className="small muted">rev {e.revision ?? '—'} · {fmtDate(e.created_at)} · {names.data?.get(e.actor_user_id ?? '') ?? 'system'}</span>
+                    <strong>{canSeeDrafts ? `${e.from_status ? `${e.from_status.replace('_', ' ')} → ` : ''}${e.to_status.replace('_', ' ')}` : e.to_status === 'published' ? 'Published' : e.to_status === 'superseded' ? 'Superseded' : e.to_status.replace('_', ' ')}</strong> <span className="small muted">rev {e.revision ?? '—'} · {fmtDate(e.created_at)} · {names.data?.get(e.actor_user_id ?? '') ?? 'system'}</span>
                     {e.comment && <div className="small">{e.comment}</div>}
+                    {!canSeeDrafts && e.to_status === 'superseded' && history.data!.revs.find((x) => x.supersedes_id === e.entity_id)?.correction_reason && (
+                      <div className="small muted">Reason: {history.data!.revs.find((x) => x.supersedes_id === e.entity_id)!.correction_reason}</div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -186,22 +193,39 @@ function ReportAction({ action, report, onClose }: { action: 'return' | 'revise'
   );
 }
 
-function DraftLineEditor({ reportId, companyId, propertyId, onSaved }: { reportId: string; companyId: string; propertyId: string; onSaved: () => void }) {
+function DraftLineEditor({ reportId, companyId, propertyId, lines, onSaved }: { reportId: string; companyId: string; propertyId: string; lines: Array<{ id: string; account_id: string; amount: number; source_account_code: string }>; onSaved: () => void }) {
   const accounts = useAccounts(companyId);
   const [account, setAccount] = useState('');
   const [code, setCode] = useState('');
   const [amount, setAmount] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const accountName = (accountId: string) => accounts.data?.find((a) => a.id === accountId)?.name ?? 'another account';
   const save = async () => {
     setErr(null);
-    const n = Number(amount);
-    if (!Number.isFinite(n)) return setErr('Amount must be a number');
+    const n = parseAmount(amount);
+    if (n === null) return setErr('Amount must be a number (e.g. 12,500 or (450) for a credit).');
+    const sourceCode = code.trim() || `MANUAL-${accounts.data?.find((a) => a.id === account)?.code}`;
+    // Never silently move an existing source line to a different reporting account.
+    const existing = lines.find((l) => l.source_account_code === sourceCode);
+    if (existing && existing.account_id !== account) {
+      return setErr(`Code ${sourceCode} is already used by ${accountName(existing.account_id)}. Use a different source code, or delete that line first.`);
+    }
+    setBusy(true);
     const { error } = await supabase.from('financial_report_lines').upsert(
-      { company_id: companyId, property_id: propertyId, financial_report_id: reportId, account_id: account, amount: n, source_account_code: code || `MANUAL-${accounts.data?.find((a) => a.id === account)?.code}`, source_account_name: 'Manual entry', source_value: amount },
+      { company_id: companyId, property_id: propertyId, financial_report_id: reportId, account_id: account, amount: n, source_account_code: sourceCode, source_account_name: 'Manual entry', source_value: amount },
       { onConflict: 'financial_report_id,source_account_code' },
     );
-    if (error) setErr(error.message);
+    setBusy(false);
+    if (error) setErr(dbErrorMessage(error));
     else { setAmount(''); setCode(''); onSaved(); }
+  };
+  const remove = async (lineId: string, sourceCode: string) => {
+    if (!confirmAction(`Delete line ${sourceCode} from this draft?`)) return;
+    setErr(null);
+    const { error } = await supabase.from('financial_report_lines').delete().eq('id', lineId);
+    if (error) setErr(dbErrorMessage(error));
+    onSaved();
   };
   return (
     <Card title="Manual line entry (draft only)">
@@ -210,8 +234,21 @@ function DraftLineEditor({ reportId, companyId, propertyId, onSaved }: { reportI
         <label className="field">Reporting account<select value={account} onChange={(e) => setAccount(e.target.value)}><option value="">Select…</option>{accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}</select></label>
         <label className="field">Source code (optional)<input value={code} onChange={(e) => setCode(e.target.value)} /></label>
         <label className="field">Amount<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
-        <button className="btn btn-primary" disabled={!account || !amount} onClick={save}>Save line</button>
+        <button className="btn btn-primary" disabled={!account || !amount.trim() || busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save line'}</button>
       </div>
+      {lines.length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary className="small">Delete a line ({lines.length})</summary>
+          <ul className="timeline" style={{ marginTop: 8 }}>
+            {lines.map((l) => (
+              <li key={l.id} className="spread">
+                <span className="small">{l.source_account_code} · {accountName(l.account_id)} · {formatCurrency(Number(l.amount), 'USD', { cents: true })}</span>
+                <button className="btn btn-sm btn-ghost" onClick={() => void remove(l.id, l.source_account_code)}>Delete</button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </Card>
   );
 }

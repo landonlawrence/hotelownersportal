@@ -7,6 +7,7 @@ import { supabase, unwrap } from '../lib/supabase';
 import { apiFetch } from '../lib/api';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate } from '../components/ui';
+import { MfaLockedNotice } from '../components/RequirePermission';
 
 interface Run {
   id: string; source_id: string | null; report_type: string; status: string; created_at: string; completed_at: string | null; attempts: number; last_error: string | null;
@@ -18,6 +19,16 @@ interface Run {
 }
 
 const TYPE_LABEL: Record<string, string> = { daily_performance: 'Daily performance', monthly_actuals: 'Monthly actuals', budget: 'Budget' };
+/** What the new/revised/unchanged counts refer to for each report type. */
+const RESULT_UNIT: Record<string, string> = { daily_performance: 'days', monthly_actuals: 'reports', budget: 'month cells' };
+const ROW_UNIT: Record<string, string> = { daily_performance: 'days', monthly_actuals: 'account lines', budget: 'month cells' };
+const MAX_IMPORT_MB = 15;
+
+const FIELD_LABEL: Record<string, string> = {
+  physical_rooms: 'Rooms', rooms_out_of_order: 'Out of order', rooms_sold: 'Rooms sold', rooms_comp: 'Comp rooms', room_revenue: 'Room revenue',
+  fb_revenue: 'F&B revenue', other_revenue: 'Other revenue', total_revenue: 'Total revenue', source_metrics: 'Source metrics',
+};
+const show = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
 
 export function ImportsPage() {
   const { can } = usePortal();
@@ -40,6 +51,7 @@ export function ImportsPage() {
   return (
     <div className="stack">
       <PageHeader title="Data imports" subtitle="Standardized CSV/XLSX uploads and scheduled report emails. Files are validated before anything is written." actions={canUpload && <button className="btn btn-primary" onClick={() => setUploading(true)}>Upload file</button>} />
+      {!canUpload && <MfaLockedNotice perms={['ingestion.manage', 'financials.edit', 'budgets.edit']}>Uploading files and managing sources need a 2FA-verified session.</MfaLockedNotice>}
       {(alerts.data ?? []).length > 0 && (
         <Card title={`Missing reports (${alerts.data!.length})`}>
           <ul className="timeline">{alerts.data!.map((a) => <li key={a.id}><StatusBadge status="late" label="missing" /> {a.message}</li>)}</ul>
@@ -58,8 +70,8 @@ export function ImportsPage() {
                     <td>{TYPE_LABEL[r.report_type]}</td>
                     <td className="small">{r.ingestion_sources?.name ?? 'Manual upload'}{r.source_files?.received_via === 'email' && ` · ${r.source_files.sender}`}</td>
                     <td><StatusBadge status={r.status} label={r.status.replace('_', ' ')} /></td>
-                    <td className="num">{r.rows_valid ?? '—'}</td>
-                    <td className="num">{r.status === 'completed' ? `${r.rows_inserted ?? 0} / ${r.rows_updated ?? 0} / ${r.rows_unchanged ?? 0}` : '—'}</td>
+                    <td className="num">{r.rows_valid ?? '—'}{r.rows_valid !== null && <span className="small muted"> {ROW_UNIT[r.report_type]}</span>}</td>
+                    <td className="num">{r.status === 'completed' ? <>{`${r.rows_inserted ?? 0} / ${r.rows_updated ?? 0} / ${r.rows_unchanged ?? 0}`}<span className="small muted"> {RESULT_UNIT[r.report_type]}</span></> : '—'}</td>
                     <td className="num">{r.issues_errors > 0 ? <span className="delta-bad">{r.issues_errors} errors</span> : r.issues_warnings > 0 ? `${r.issues_warnings} warnings` : '—'}</td>
                   </tr>
                 ))}
@@ -74,7 +86,7 @@ export function ImportsPage() {
   );
 }
 
-function UploadImport({ onClose, sources }: { onClose: () => void; sources: Array<{ id: string; name: string; report_type: string; channel: string }> }) {
+function UploadImport({ onClose, sources }: { onClose: () => void; sources: Array<{ id: string; name: string; report_type: string; channel: string; active: boolean }> }) {
   const company = useCompany();
   const { can } = usePortal();
   const qc = useQueryClient();
@@ -88,9 +100,14 @@ function UploadImport({ onClose, sources }: { onClose: () => void; sources: Arra
   const [replace, setReplace] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [msg, setMsg] = useState<{ tone: 'good' | 'bad' | 'warn'; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
   const parser = listParsers().find((p) => p.reportType === type)!;
   const go = async () => {
-    if (!file) return;
+    if (!file || busy) return;
+    if (file.size > MAX_IMPORT_MB * 1024 * 1024) return setMsg({ tone: 'bad', text: `File is too large (max ${MAX_IMPORT_MB} MB).` });
+    setBusy(true);
+    setMsg(null);
     const form = new FormData();
     form.set('company_id', company.company_id);
     form.set('report_type', type);
@@ -100,30 +117,33 @@ function UploadImport({ onClose, sources }: { onClose: () => void; sources: Arra
     try {
       const res = await apiFetch('/imports', { method: 'POST', body: form });
       const body = (await res.json()) as { status: string };
-      setMsg(body.status === 'duplicate' ? { tone: 'warn', text: 'This exact file was already imported. Nothing was changed.' } : { tone: 'good', text: 'File received. Validation and loading run in the background — check the import history.' });
+      setMsg(body.status === 'duplicate' ? { tone: 'warn', text: 'This exact file was already imported and is still the latest data. Nothing was changed.' } : { tone: 'good', text: 'File received. Validation and loading run in the background — check the import history.' });
+      setDone(true);
       await qc.invalidateQueries({ queryKey: ['import-runs'] });
     } catch (e) {
       setMsg({ tone: 'bad', text: errorMessage(e) });
+    } finally {
+      setBusy(false);
     }
   };
   return (
     <Modal title="Upload data file" onClose={onClose}>
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
       <label className="field">Report type<select value={type} onChange={(e) => setType(e.target.value)}>{types.map((t) => <option key={t.v} value={t.v}>{TYPE_LABEL[t.v]}</option>)}</select></label>
-      <label className="field">Source (optional)<select value={source} onChange={(e) => setSource(e.target.value)}><option value="">Manual upload (property codes)</option>{sources.filter((s) => s.report_type === type).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-      <input type="file" aria-label="Data file" accept=".csv,.xlsx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <label className="field">Source (optional)<select value={source} onChange={(e) => setSource(e.target.value)}><option value="">Manual upload (property codes)</option>{sources.filter((s) => s.report_type === type).map((s) => <option key={s.id} value={s.id} disabled={!s.active}>{s.name}{s.active ? '' : ' (paused)'}</option>)}</select></label>
+      <input type="file" aria-label="Data file" accept=".csv,.xlsx" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setDone(false); setMsg(null); }} />
       <p className="small muted">Required columns: {parser.requiredColumns.join(', ')}{parser.optionalColumns.length > 0 && `. Optional: ${parser.optionalColumns.join(', ')}`}.</p>
       {type !== 'budget' && (
-        <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} /> Replace previously loaded values for the same dates/periods (history is kept). Otherwise conflicts go to review.</label>
+        <label className="small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><input type="checkbox" style={{ marginTop: 2, flex: 'none' }} checked={replace} onChange={(e) => setReplace(e.target.checked)} /> <span>Replace previously loaded values for the same dates/periods (history is kept). Otherwise conflicts go to review.</span></label>
       )}
-      <button className="btn btn-primary" disabled={!file} onClick={go}>Upload & validate</button>
+      <button className="btn btn-primary" disabled={!file || busy || done} onClick={() => void go()}>{busy ? 'Uploading…' : done ? 'Uploaded' : 'Upload & validate'}</button>
     </Modal>
   );
 }
 
 export function ImportDetailPage() {
   const { id } = useParams();
-  const { can } = usePortal();
+  const { can, properties } = usePortal();
   const qc = useQueryClient();
   const run = useQuery({
     queryKey: ['import-run', id],
@@ -132,16 +152,27 @@ export function ImportDetailPage() {
   });
   const issues = useQuery({
     queryKey: ['import-issues', id],
-    queryFn: async () => unwrap(await supabase.from('import_validation_issues').select('id, severity, row_number, field, code, message').eq('import_run_id', id!).order('row_number', { nullsFirst: true }).limit(500)) as Array<{ id: number; severity: string; row_number: number | null; field: string | null; code: string; message: string }>,
+    queryFn: async () => unwrap(await supabase.from('import_validation_issues').select('id, severity, row_number, field, code, message').eq('import_run_id', id!).order('row_number', { nullsFirst: true }).order('id').limit(500)) as Array<{ id: number; severity: string; row_number: number | null; field: string | null; code: string; message: string }>,
   });
   const [err, setErr] = useState<string | null>(null);
-  const act = async (path: string) => {
+  const [pending, setPending] = useState(false);
+  const act = async (path: 'approve' | 'reject' | 'retry') => {
+    if (pending) return;
+    let note: string | null = null;
+    if (path === 'reject') {
+      const answer = window.prompt('Reject this import? Nothing from it will be loaded. Optionally add a note for the record:', '');
+      if (answer === null) return;
+      note = answer.trim() || null;
+    }
+    setPending(true);
     setErr(null);
     try {
-      await apiFetch(`/imports/${id}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      await apiFetch(`/imports/${id}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(note ? { note } : {}) });
       await qc.invalidateQueries();
     } catch (e) {
       setErr(errorMessage(e));
+    } finally {
+      setPending(false);
     }
   };
   if (run.isLoading) return <Loading />;
@@ -155,9 +186,9 @@ export function ImportDetailPage() {
       <PageHeader title={r.source_files?.original_filename ?? 'Import'} subtitle={<>{TYPE_LABEL[r.report_type]} · <StatusBadge status={r.status} label={r.status.replace('_', ' ')} /></>}
         actions={
           <>
-            {r.status === 'needs_review' && manage && <button className="btn btn-primary" onClick={() => act('approve')}>Approve revision</button>}
-            {['needs_review', 'failed'].includes(r.status) && can('ingestion.manage') && <button className="btn btn-danger" onClick={() => act('reject')}>Reject</button>}
-            {r.status === 'failed' && can('ingestion.manage') && <button className="btn" onClick={() => act('retry')}>Retry</button>}
+            {r.status === 'needs_review' && manage && <button className="btn btn-primary" disabled={pending} onClick={() => void act('approve')}>{pending ? 'Working…' : 'Approve revision'}</button>}
+            {['needs_review', 'failed'].includes(r.status) && can('ingestion.manage') && <button className="btn btn-danger" disabled={pending} onClick={() => void act('reject')}>Reject</button>}
+            {r.status === 'failed' && can('ingestion.manage') && <button className="btn" disabled={pending} onClick={() => void act('retry')}>Retry</button>}
           </>
         } />
       {err && <Notice tone="bad">{err}</Notice>}
@@ -169,21 +200,37 @@ export function ImportDetailPage() {
           <dt>Source</dt><dd>{r.ingestion_sources?.name ?? 'Manual upload'} ({r.source_files?.received_via}{r.source_files?.sender ? `, ${r.source_files.sender}` : ''})</dd>
           <dt>Received</dt><dd>{fmtDate(r.created_at, { dateStyle: 'medium', timeStyle: 'short' } as Intl.DateTimeFormatOptions)}</dd>
           <dt>Period</dt><dd>{r.period_start ? `${fmtDate(r.period_start)} – ${fmtDate(r.period_end)}` : '—'}</dd>
-          <dt>Rows</dt><dd>{r.rows_valid ?? 0} valid of {r.rows_total ?? 0}</dd>
-          <dt>Result</dt><dd>{r.status === 'completed' ? `${r.rows_inserted ?? 0} new, ${r.rows_updated ?? 0} revised, ${r.rows_unchanged ?? 0} unchanged` : '—'}</dd>
+          <dt>Rows</dt><dd>{r.rows_valid ?? 0} valid of {r.rows_total ?? 0} ({ROW_UNIT[r.report_type]})</dd>
+          <dt>Result</dt><dd>{r.status === 'completed' ? `${r.rows_inserted ?? 0} new, ${r.rows_updated ?? 0} revised, ${r.rows_unchanged ?? 0} unchanged ${RESULT_UNIT[r.report_type]}` : '—'}</dd>
           <dt>Replacement rule</dt><dd>{r.replace_existing ? 'Replace existing values (history kept)' : 'Review required for changed values'}</dd>
-          <dt>File fingerprint</dt><dd className="small muted">{r.source_files?.sha256}</dd>
+          <dt>File fingerprint</dt><dd className="small muted token">{r.source_files?.sha256}</dd>
           {r.review_note && <><dt>Review note</dt><dd>{r.review_note}</dd></>}
         </dl>
       </Card>
       {conflicts.length > 0 && (
-        <Card title="Changed values" flush>
-          <div className="table-wrap"><table className="data"><thead><tr><th>Property / period</th><th>Existing</th><th>Incoming</th></tr></thead><tbody>
-            {conflicts.slice(0, 100).map((c, i) => <tr key={i}><td className="small">{String(c.businessDate ?? c.periodMonth ?? '')}</td><td className="small muted">{c.existing ? JSON.stringify(c.existing) : String(c.reason ?? '')}</td><td className="small">{c.incoming ? JSON.stringify(c.incoming) : ''}</td></tr>)}
+        <Card title={`Changed values${conflicts.length > 100 ? ' (first 100)' : ''}`} flush>
+          <div className="table-wrap"><table className="data"><thead><tr><th>Property</th><th>Date / period</th><th>Change</th></tr></thead><tbody>
+            {conflicts.slice(0, 100).map((c, i) => {
+              const code = properties.find((p) => p.id === c.propertyId)?.code ?? '—';
+              const existing = (c.existing ?? null) as Record<string, unknown> | null;
+              const incoming = (c.incoming ?? null) as Record<string, unknown> | null;
+              const changed = existing && incoming ? Object.keys(incoming).filter((k) => JSON.stringify(existing[k]) !== JSON.stringify(incoming[k])) : [];
+              return (
+                <tr key={i}>
+                  <td>{code}</td>
+                  <td className="small">{fmtDate(String(c.businessDate ?? c.periodMonth ?? ''))}</td>
+                  <td className="small" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                    {changed.length > 0
+                      ? changed.map((k) => <div key={k}><strong>{FIELD_LABEL[k] ?? k.replace(/_/g, ' ')}</strong>: {show(existing![k])} → {show(incoming![k])}</div>)
+                      : String(c.reason ?? '')}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody></table></div>
         </Card>
       )}
-      <Card title={`Validation issues (${issues.data?.length ?? 0})`} flush>
+      <Card title={`Validation issues (${r.issues_errors + r.issues_warnings})${(issues.data?.length ?? 0) < r.issues_errors + r.issues_warnings ? ` — showing first ${issues.data?.length ?? 0}` : ''}`} flush>
         {(issues.data ?? []).length === 0 ? <Empty title="No issues" /> : (
           <div className="table-wrap"><table className="data"><thead><tr><th>Severity</th><th>Row</th><th>Field</th><th>Issue</th></tr></thead><tbody>
             {issues.data!.map((i) => <tr key={i.id}><td><StatusBadge status={i.severity === 'error' ? 'error' : 'pending'} label={i.severity} /></td><td>{i.row_number ?? 'file'}</td><td>{i.field ?? '—'}</td><td>{i.message}<div className="small muted">{i.code}</div></td></tr>)}

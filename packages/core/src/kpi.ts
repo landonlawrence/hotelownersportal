@@ -182,7 +182,7 @@ export function portfolioRollup(rows: PropertyPeriodSums[]): PortfolioResult {
     coverage: cov,
     partial: !cov.complete,
     propertiesWithGaps: rows.filter((r) => r.reportedDays < r.expectedDays).map((r) => r.propertyId),
-    propertiesWithoutData: rows.filter((r) => r.reportedDays === 0).map((r) => r.propertyId),
+    propertiesWithoutData: rows.filter((r) => r.reportedDays === 0 && r.expectedDays > 0).map((r) => r.propertyId),
     properties: rows.map((r) => ({
       propertyId: r.propertyId,
       kpis: r.reportedDays > 0 ? computeKpis(r) : EMPTY_KPIS,

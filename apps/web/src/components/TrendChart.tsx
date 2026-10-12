@@ -8,6 +8,8 @@ export interface TrendPoint {
   actual: number | null;
   priorYear: number | null;
   budget: number | null;
+  /** Not every operating hotel reported for this point. */
+  partial?: boolean;
 }
 
 const SERIES = [
@@ -24,6 +26,7 @@ const SERIES = [
 export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]; kind: KpiKind; title: string; currency?: string }) {
   const [view, setView] = useState<'chart' | 'table'>('chart');
   const visible = SERIES.filter((s) => data.some((d) => d[s.key] !== null));
+  const anyPartial = data.some((d) => d.partial && d.actual !== null);
   return (
     <div className="stack" style={{ gap: 10 }}>
       <div className="spread">
@@ -34,6 +37,11 @@ export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]
               {s.name}
             </span>
           ))}
+          {anyPartial && (
+            <span className="trend-partial">
+              <svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="#ffffff" stroke="#2a78d6" strokeWidth="1.5" /></svg> partial — not all hotels reported
+            </span>
+          )}
         </div>
         <Segmented
           label={`${title} view`}
@@ -64,7 +72,10 @@ export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]
                 content={({ active, payload, label }) =>
                   active && payload ? (
                     <div className="chart-tooltip">
-                      <div className="muted" style={{ marginBottom: 4 }}>{label}</div>
+                      <div className="muted" style={{ marginBottom: 4 }}>
+                        {label}
+                        {data.find((d) => d.label === label)?.partial && ' · partial (not all hotels reported)'}
+                      </div>
                       {visible.map((s) => {
                         const p = payload.find((x) => x.dataKey === s.key);
                         return (
@@ -88,7 +99,15 @@ export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]
                   stroke={s.color}
                   strokeWidth={2}
                   strokeDasharray={s.dash}
-                  dot={false}
+                  dot={
+                    s.key === 'actual'
+                      ? (props: { cx?: number; cy?: number; index?: number; key?: string }) => {
+                          const pt = props.index === undefined ? undefined : data[props.index];
+                          if (!pt?.partial || pt.actual === null || props.cx === undefined || props.cy === undefined) return <g key={props.key} />;
+                          return <circle key={props.key} cx={props.cx} cy={props.cy} r={3.5} fill="#ffffff" stroke={s.color} strokeWidth={1.5} />;
+                        }
+                      : false
+                  }
                   activeDot={{ r: 4, strokeWidth: 2, stroke: '#ffffff' }}
                   connectNulls={false}
                   isAnimationActive={false}
@@ -111,7 +130,10 @@ export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]
             <tbody>
               {data.map((d) => (
                 <tr key={d.label}>
-                  <td>{d.label}</td>
+                  <td>
+                    {d.label}
+                    {d.partial && d.actual !== null && <span className="trend-partial" title="Not all hotels reported"> · partial</span>}
+                  </td>
                   {visible.map((s) => (
                     <td key={s.key} className="num">{fmtKpi(d[s.key], kind, currency)}</td>
                   ))}

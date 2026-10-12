@@ -1,3 +1,4 @@
+import { useCallback, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from './supabase';
 import type { Account } from '@hop/core';
@@ -21,11 +22,47 @@ export function useDisplayNames(ids: Array<string | null | undefined>) {
   });
 }
 
-/** Wraps an RPC call as a mutation that refreshes all queries on success. */
+/**
+ * Synchronous in-flight guard for submit handlers. React state (isPending) only updates
+ * after a re-render, so both clicks of a double-click would otherwise get through.
+ * `guard(fn)` runs fn unless a previous run is still in flight; then it returns undefined.
+ */
+export function useSubmitGuard() {
+  const inFlight = useRef(false);
+  return useCallback(async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+    if (inFlight.current) return undefined;
+    inFlight.current = true;
+    try {
+      return await fn();
+    } finally {
+      inFlight.current = false;
+    }
+  }, []);
+}
+
+/**
+ * Wraps an RPC call as a mutation that refreshes all queries on success. A second call
+ * while one is in flight is ignored (its promise never settles), so a double-click
+ * sends exactly one RPC.
+ */
 export function useRpc<A extends Record<string, unknown>>(fn: string) {
   const qc = useQueryClient();
-  return useMutation({
+  const inFlight = useRef(false);
+  const m = useMutation({
     mutationFn: async (args: A) => unwrap(await supabase.rpc(fn, args)),
     onSuccess: () => qc.invalidateQueries(),
   });
+  const { mutateAsync: rawAsync } = m;
+  const mutateAsync = useCallback(
+    (args: A): ReturnType<typeof rawAsync> => {
+      if (inFlight.current) return new Promise<never>(() => undefined);
+      inFlight.current = true;
+      return rawAsync(args).finally(() => {
+        inFlight.current = false;
+      });
+    },
+    [rawAsync],
+  );
+  const mutate = useCallback((args: A) => void mutateAsync(args).catch(() => undefined), [mutateAsync]);
+  return { ...m, mutate, mutateAsync };
 }

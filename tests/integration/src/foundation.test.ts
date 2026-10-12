@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import * as OTPAuth from 'otpauth';
 import { PERMISSION_KEYS } from '@hop/core';
-import { anonClient, COMPANY, MEMBERSHIP, PROPERTY, serviceDb, signIn, sql, USER } from './helpers';
+import { anonClient, call, COMPANY, MEMBERSHIP, PROPERTY, serviceDb, signIn, sql, USER } from './helpers';
 
 const codes = (rows: Array<{ code: string }> | null) => (rows ?? []).map((r) => r.code).sort();
 
@@ -283,6 +283,26 @@ describe('platform support access', () => {
     expect((docs ?? []).every((d) => d.visibility === 'general')).toBe(true);
     const publish = await pa.db.rpc('publish_financial_report', { p_report_id: '00000000-0000-0000-0000-000000000000' });
     expect(publish.error?.code).toBe('42501');
+
+    // The open session is useless to a password-only (aal1) login of the same platform user.
+    const aal1 = await signIn(USER.platform, undefined, true);
+    const { data: ctx1 } = await aal1.db.rpc('my_context');
+    expect(ctx1.companies).toEqual([]);
+    expect((ctx1.support_sessions_awaiting_mfa as Array<{ company_id: string }>).map((s) => s.company_id)).toEqual([COMPANY.harborview]);
+    expect((await aal1.db.from('financial_reports').select('id').eq('company_id', COMPANY.harborview).limit(1)).data).toEqual([]);
+    expect((await aal1.db.from('financial_report_lines').select('id').eq('company_id', COMPANY.harborview).limit(1)).data).toEqual([]);
+    expect((await aal1.db.from('daily_performance').select('id').eq('company_id', COMPANY.harborview).limit(1)).data).toEqual([]);
+    expect((await aal1.db.from('properties').select('id').eq('company_id', COMPANY.harborview)).data).toEqual([]);
+    const exp = await call(`/exports/performance.csv?company_id=${COMPANY.harborview}&from=2026-01-01&to=2026-01-31`, { token: aal1.token });
+    expect(exp.status).toBe(403);
+    // Stepping the original session up to aal2 keeps access.
+    expect(((await pa.db.from('financial_reports').select('id').eq('company_id', COMPANY.harborview).limit(1)).data ?? []).length).toBe(1);
+    // Company admins were told about it.
+    const { data: notes } = await (await signIn(USER.hvAdmin)).db.from('notifications').select('kind, link_path').eq('entity_id', sessionId);
+    expect(notes).toEqual([{ kind: 'support_session_opened', link_path: '/admin?tab=support' }]);
+    // …and can see who opened it.
+    const { data: who } = await (await signIn(USER.hvAdmin)).db.from('profiles').select('email').eq('id', pa.userId);
+    expect(who).toEqual([{ email: USER.platform }]);
 
     const admin = await signIn(USER.hvAdmin);
     const { data: audit } = await admin.db.from('audit_events').select('action, actor_kind').eq('entity_type', 'support_access_sessions').eq('entity_id', sessionId);

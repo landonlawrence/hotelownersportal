@@ -87,3 +87,26 @@ export function parsePeriodCell(raw: string | undefined): string | null {
   }
   return null;
 }
+
+/**
+ * Every property a file refers to (valid or invalid rows), and whether any row
+ * names a property code that could not be resolved. Used to scope who may see
+ * an import run and its issues: a run is only visible to property-scoped users
+ * when every row is within their properties.
+ */
+export function tablePropertyScope(
+  table: Table,
+  propertyByCode: Map<string, { id: string }>,
+): { propertyIds: string[]; unresolved: boolean } {
+  const reader = new RowReader(table);
+  if (!reader.has('property_code')) return { propertyIds: [], unresolved: table.rows.length > 0 };
+  const ids = new Set<string>();
+  let unresolved = false;
+  for (const row of table.rows) {
+    const code = reader.get(row, 'property_code') ?? '';
+    const p = propertyByCode.get(code) ?? propertyByCode.get(code.toUpperCase());
+    if (p) ids.add(p.id);
+    else unresolved = true;
+  }
+  return { propertyIds: [...ids], unresolved };
+}

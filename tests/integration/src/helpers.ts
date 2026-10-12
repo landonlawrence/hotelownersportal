@@ -115,3 +115,21 @@ export async function ensureDemoFiles() {
 export function csvFile(name: string, text: string): File {
   return new File([text], name, { type: 'text/csv' });
 }
+
+/** Enroll a TOTP factor on this client's session and verify it (session becomes aal2). Returns the factor id. */
+export async function stepUpToAal2(db: SupabaseClient): Promise<string> {
+  const OTPAuth = await import('otpauth');
+  const { data: enroll, error } = await db.auth.mfa.enroll({ factorType: 'totp', friendlyName: `test-${Date.now()}-${Math.random()}` });
+  if (error || !enroll) throw new Error(`enroll failed: ${error?.message}`);
+  const totp = new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(enroll.totp.secret) });
+  const { data: ch } = await db.auth.mfa.challenge({ factorId: enroll.id });
+  const { error: vErr } = await db.auth.mfa.verify({ factorId: enroll.id, challengeId: ch!.id, code: totp.generate() });
+  if (vErr) throw new Error(`verify failed: ${vErr.message}`);
+  return enroll.id;
+}
+
+/** Current access token of a client (after MFA step-up the token changes). */
+export async function tokenOf(db: SupabaseClient): Promise<string> {
+  const { data } = await db.auth.getSession();
+  return data.session!.access_token;
+}

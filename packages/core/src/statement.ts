@@ -29,7 +29,8 @@ function sum(vals: Array<number | null>): number | null {
   const present = vals.filter((v): v is number => v !== null);
   return present.length ? present.reduce((a, b) => a + b, 0) : null;
 }
-const sub = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
+/** Difference of two subtotals; a missing (empty) side counts as zero unless both are missing. */
+export const sub = (a: number | null, b: number | null) => (a === null && b === null ? null : (a ?? 0) - (b ?? 0));
 
 /**
  * Builds a USALI-style summary statement with derived subtotals:

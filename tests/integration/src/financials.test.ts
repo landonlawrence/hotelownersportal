@@ -67,7 +67,10 @@ describe('financial report publication workflow', () => {
     expect(after!.map((r) => `${r.revision}:${r.status}`)).toEqual(['1:superseded', '2:published']);
     expect(after![1]).toMatchObject({ supersedes_id: published.id, correction_reason: 'Utilities accrual corrected' });
     const { data: events } = await owner.db.from('publication_events').select('entity_id, to_status').in('entity_id', [published.id, revId]).order('id');
-    expect(events!.map((e) => e.to_status)).toEqual(expect.arrayContaining(['published', 'superseded', 'draft', 'in_review']));
+    // Owners see publication outcomes only (R1-05); the internal review trail stays with finance.
+    expect([...new Set(events!.map((e) => e.to_status))].sort()).toEqual(['published', 'superseded']);
+    const { data: finEvents } = await fin.db.from('publication_events').select('to_status').in('entity_id', [published.id, revId]);
+    expect(finEvents!.map((e) => e.to_status)).toEqual(expect.arrayContaining(['published', 'superseded', 'draft', 'in_review']));
     const { data: rev2Notes } = await owner.db.from('notifications').select('title').eq('entity_id', revId);
     expect(rev2Notes![0]!.title).toMatch(/revised/);
   });

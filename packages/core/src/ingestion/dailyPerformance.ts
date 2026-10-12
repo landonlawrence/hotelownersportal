@@ -69,7 +69,7 @@ export function parseDailyPerformance(table: Table, ctx: ParseContext): ParseRes
         row: rowNo,
         field: 'property_code',
         code: 'unmapped_property',
-        message: `Property code "${code}" is not mapped to a property of this company for this source`,
+        message: `Property code "${code}" is not mapped to a property of this company${ctx.routed ? ' for this source' : ''}`,
       });
     }
     const rawDate = reader.get(row, 'business_date');

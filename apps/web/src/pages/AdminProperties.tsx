@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from '../lib/supabase';
 import { usePortal, useCompany, type Property } from '../state/portal';
-import { Card, Modal, Notice, StatusBadge, fmtDate } from '../components/ui';
+import { Card, Modal, Notice, StatusBadge, confirmAction, dbErrorMessage, fmtDate, fmtExclusiveEnd, localToday } from '../components/ui';
 
 const TIMEZONES: string[] = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Pacific/Honolulu', 'UTC'];
 
@@ -19,12 +19,16 @@ export function AdminProperties() {
   const inv = useQuery({ queryKey: ['admin-inventory', company.company_id], queryFn: async () => unwrap(await supabase.from('room_inventory_history').select('property_id, room_count, effective_from, effective_to, reason').eq('company_id', company.company_id).order('effective_from')) as Inventory[] });
   const cfg = useQuery({ queryKey: ['admin-config', company.company_id], queryFn: async () => unwrap(await supabase.from('property_reporting_config').select('property_id, ooo_treatment, comp_treatment, daily_report_deadline_local').eq('company_id', company.company_id)) as Config[] });
   const refresh = () => qc.invalidateQueries({ predicate: (q) => ['admin-inventory', 'admin-config', 'properties', 'inventory', 'inventory-history', 'reporting-config'].includes(String(q.queryKey[0])) });
+  const [cfgErr, setCfgErr] = useState<string | null>(null);
   const setConfig = async (propertyId: string, patch: Partial<Config>) => {
-    await supabase.from('property_reporting_config').update(patch).eq('property_id', propertyId);
+    setCfgErr(null);
+    const { error } = await supabase.from('property_reporting_config').update(patch).eq('property_id', propertyId);
+    if (error) setCfgErr(dbErrorMessage(error));
     await refresh();
   };
   return (
     <Card flush title="Properties" actions={<button className="btn btn-primary" style={{ marginRight: 16 }} onClick={() => setEditing('new')}>Add property</button>}>
+      {cfgErr && <div style={{ padding: '0 16px' }}><Notice tone="bad">{cfgErr}</Notice></div>}
       <div className="table-wrap">
         <table className="data">
           <thead><tr><th>Property</th><th>Status</th><th className="num">Rooms</th><th>Out-of-order rooms</th><th>Comp rooms</th><th>Daily report due</th><th /></tr></thead>
@@ -51,43 +55,62 @@ export function AdminProperties() {
         </table>
       </div>
       <p className="small muted" style={{ padding: '8px 16px' }}>KPI conventions apply to all dashboards, exports and reports. Changing them recalculates history; the PMS-reported values are always preserved alongside.</p>
-      {editing && <PropertyForm property={editing === 'new' ? null : editing} onClose={() => { setEditing(null); void refresh(); }} />}
+      {editing && <PropertyForm property={editing === 'new' ? null : editing} inventory={editing === 'new' ? [] : (inv.data ?? []).filter((i) => i.property_id === editing.id)} onClose={() => { setEditing(null); void refresh(); }} />}
       {inventoryFor && <InventoryModal property={inventoryFor} history={(inv.data ?? []).filter((i) => i.property_id === inventoryFor.id)} onClose={() => { setInventoryFor(null); void refresh(); }} />}
     </Card>
   );
 }
 
-function PropertyForm({ property, onClose }: { property: Property | null; onClose: () => void }) {
+function PropertyForm({ property, inventory, onClose }: { property: Property | null; inventory: Inventory[]; onClose: () => void }) {
   const company = useCompany();
   const [f, setF] = useState({
     code: property?.code ?? '', name: property?.name ?? '', brand: property?.brand ?? '', city: property?.city ?? '', region: property?.region ?? '',
     timezone: property?.timezone ?? 'America/New_York', status: property?.status ?? 'onboarding', opened_on: property?.opened_on ?? '', rooms: '',
   });
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const firstData = useQuery({
+    queryKey: ['first-business-date', property?.id],
+    enabled: !!property,
+    queryFn: async () => unwrap(await supabase.from('daily_performance').select('business_date').eq('property_id', property!.id).order('business_date').limit(1)) as Array<{ business_date: string }>,
+  });
+  const roomsValid = f.rooms.trim() === '' || /^[1-9]\d{0,4}$/.test(f.rooms.trim());
+  const codeValid = /^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$/.test(f.code.trim());
+  const nameValid = f.name.trim().length >= 2 && f.name.trim().length <= 200;
+  const earliestInventory = inventory.map((i) => i.effective_from).sort()[0];
+  const earliestData = firstData.data?.[0]?.business_date;
+  const today = localToday();
+  const twoYears = `${Number(today.slice(0, 4)) + 2}${today.slice(4)}`;
+  const openedTooLate = !!f.opened_on && !!earliestData && f.opened_on > earliestData;
+  const openedFarFuture = !!f.opened_on && f.status === 'active' && f.opened_on > twoYears;
   const save = async () => {
     setErr(null);
-    const row = { name: f.name.trim(), brand: f.brand || null, city: f.city || null, region: f.region || null, timezone: f.timezone, status: f.status, opened_on: f.opened_on || null };
+    if (!roomsValid) return setErr('Rooms must be a whole number between 1 and 99,999.');
+    if (property && f.opened_on && earliestInventory && f.opened_on > earliestInventory && f.opened_on !== property.opened_on
+        && !confirmAction(`Room inventory exists from ${fmtDate(earliestInventory)}, before the new opening date. Save anyway?`)) return;
+    setBusy(true);
+    const row = { name: f.name.trim(), brand: f.brand.trim() || null, city: f.city.trim() || null, region: f.region.trim() || null, timezone: f.timezone, status: f.status, opened_on: f.opened_on || null };
     if (property) {
       const { error } = await supabase.from('properties').update(row).eq('id', property.id);
-      if (error) return setErr(error.message);
+      setBusy(false);
+      if (error) return setErr(dbErrorMessage(error));
     } else {
-      const { data: newId, error } = await supabase.rpc('create_property', {
-        p_company_id: company.company_id, p_code: f.code, p_name: row.name, p_timezone: row.timezone, p_status: row.status,
+      // One transaction: the property and its opening inventory are created together.
+      const { error } = await supabase.rpc('create_property', {
+        p_company_id: company.company_id, p_code: f.code.trim(), p_name: row.name, p_timezone: row.timezone, p_status: row.status,
         p_brand: row.brand, p_city: row.city, p_region: row.region, p_opened_on: row.opened_on,
+        p_room_count: f.rooms.trim() ? Number(f.rooms.trim()) : null,
       });
-      if (error) return setErr(error.message);
-      if (Number(f.rooms) > 0) {
-        const { error: e2 } = await supabase.rpc('set_room_inventory', { p_property_id: newId as string, p_effective_from: f.opened_on || new Date().toISOString().slice(0, 10), p_room_count: Number(f.rooms), p_reason: 'Opening inventory' });
-        if (e2) return setErr(e2.message);
-      }
+      setBusy(false);
+      if (error) return setErr(dbErrorMessage(error));
     }
     onClose();
   };
   return (
     <Modal title={property ? `Edit ${property.name}` : 'Add property'} onClose={onClose}>
       {err && <Notice tone="bad">{err}</Notice>}
-      {!property && <label className="field">Code (unique, e.g. HV-BOS)<input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} /></label>}
-      <label className="field">Name<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+      {!property && <label className="field">Code (unique, e.g. HV-BOS)<input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />{f.code && !codeValid && <span className="field-error">2–32 letters, numbers, dashes or underscores.</span>}</label>}
+      <label className="field">Name<input value={f.name} maxLength={200} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
       <div className="row">
         <label className="field">Brand<input value={f.brand} onChange={(e) => setF({ ...f, brand: e.target.value })} /></label>
         <label className="field">Status<select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>{['onboarding', 'active', 'sold', 'archived'].map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
@@ -97,38 +120,61 @@ function PropertyForm({ property, onClose }: { property: Property | null; onClos
         <label className="field">Region<input value={f.region} onChange={(e) => setF({ ...f, region: e.target.value })} /></label>
       </div>
       <label className="field">Time zone (defines the property-local business date)<select value={f.timezone} onChange={(e) => setF({ ...f, timezone: e.target.value })}>{TIMEZONES.map((t) => <option key={t} value={t}>{t}</option>)}</select></label>
-      <label className="field">Opened on<input type="date" value={f.opened_on} onChange={(e) => setF({ ...f, opened_on: e.target.value })} /></label>
-      {!property && <label className="field">Rooms at opening<input inputMode="numeric" value={f.rooms} onChange={(e) => setF({ ...f, rooms: e.target.value })} /></label>}
-      <button className="btn btn-primary" disabled={!f.name.trim() || (!property && !/^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$/.test(f.code.trim()))} onClick={save}>{property ? 'Save changes' : 'Add property'}</button>
+      <label className="field">
+        Opened on
+        <input type="date" value={f.opened_on} onChange={(e) => setF({ ...f, opened_on: e.target.value })} />
+        {openedTooLate && <span className="field-error">Daily data exists from {fmtDate(earliestData)}; the opening date must be on or before it.</span>}
+        {openedFarFuture && <span className="field-error">An active property can’t open more than two years from now.</span>}
+      </label>
+      {!property && (
+        <label className="field">
+          Rooms at opening
+          <input inputMode="numeric" value={f.rooms} onChange={(e) => setF({ ...f, rooms: e.target.value })} />
+          {!roomsValid && <span className="field-error">Enter a whole number of rooms (1–99,999), or leave blank to set later.</span>}
+        </label>
+      )}
+      <button className="btn btn-primary" disabled={busy || !nameValid || (!property && !codeValid) || !roomsValid || openedTooLate || openedFarFuture} onClick={() => void save()}>{busy ? 'Saving…' : property ? 'Save changes' : 'Add property'}</button>
       {!property && <p className="small muted">New properties are visible to company-wide roles immediately. Grant owners and investors access under Users & access.</p>}
     </Modal>
   );
 }
 
 function InventoryModal({ property, history, onClose }: { property: Property; history: Inventory[]; onClose: () => void }) {
-  const [f, setF] = useState({ from: new Date().toISOString().slice(0, 10), rooms: '', reason: '' });
+  const [f, setF] = useState({ from: localToday(), rooms: '', reason: '' });
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const latest = useQuery({
+    queryKey: ['latest-business-date', property.id],
+    queryFn: async () => unwrap(await supabase.from('daily_performance').select('business_date').eq('property_id', property.id).order('business_date', { ascending: false }).limit(1)) as Array<{ business_date: string }>,
+  });
+  const latestDate = latest.data?.[0]?.business_date;
+  const retroactive = !!latestDate && f.from <= latestDate;
+  const roomsValid = /^[1-9]\d{0,4}$/.test(f.rooms.trim());
   const save = async () => {
     setErr(null);
-    const { error } = await supabase.rpc('set_room_inventory', { p_property_id: property.id, p_effective_from: f.from, p_room_count: Number(f.rooms), p_reason: f.reason });
-    if (error) setErr(error.message);
+    setBusy(true);
+    const { error } = await supabase.rpc('set_room_inventory', { p_property_id: property.id, p_effective_from: f.from, p_room_count: Number(f.rooms.trim()), p_reason: f.reason.trim() });
+    setBusy(false);
+    if (error) setErr(dbErrorMessage(error));
     else onClose();
   };
   return (
     <Modal title={`Room inventory — ${property.name}`} onClose={onClose}>
       <table className="data">
         <thead><tr><th>From</th><th>To</th><th className="num">Rooms</th><th>Reason</th></tr></thead>
-        <tbody>{history.map((h) => <tr key={h.effective_from}><td>{fmtDate(h.effective_from)}</td><td>{h.effective_to ? fmtDate(h.effective_to) : 'Current'}</td><td className="num">{h.room_count}</td><td>{h.reason}</td></tr>)}</tbody>
+        <tbody>{history.map((h) => <tr key={h.effective_from}><td>{fmtDate(h.effective_from)}</td><td>{h.effective_to ? fmtExclusiveEnd(h.effective_to) : 'Current'}</td><td className="num">{h.room_count}</td><td>{h.reason}</td></tr>)}</tbody>
       </table>
       <h3>Change room count</h3>
-      <p className="small muted">The current period ends the day before the new count takes effect. Available room nights for each business date use the count in effect on that date (unless the PMS report supplies rooms available).</p>
+      <p className="small muted">The current period ends the day before the new count takes effect. Days imported from now on use the count in effect on their business date (unless the PMS report supplies rooms available).</p>
+      {retroactive && <Notice tone="warn">Days already imported keep the room count they were loaded with (data exists through {fmtDate(latestDate)}). Re-import those days to apply the new count.</Notice>}
       {err && <Notice tone="bad">{err}</Notice>}
       <div className="row">
         <label className="field">Effective from<input type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} /></label>
         <label className="field">Rooms<input inputMode="numeric" value={f.rooms} onChange={(e) => setF({ ...f, rooms: e.target.value })} /></label>
       </div>
       <label className="field">Reason<input value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} placeholder="e.g. 12-room wing opened" /></label>
-      <button className="btn btn-primary" disabled={!(Number(f.rooms) > 0) || !f.reason.trim()} onClick={save}>Save inventory change</button>
+      {f.rooms.trim() && !roomsValid && <span className="field-error">Enter a whole number of rooms (1–99,999).</span>}
+      <button className="btn btn-primary" disabled={busy || !roomsValid || !f.reason.trim() || !f.from} onClick={() => void save()}>{busy ? 'Saving…' : 'Save inventory change'}</button>
     </Modal>
   );
 }

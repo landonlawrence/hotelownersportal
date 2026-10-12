@@ -29,7 +29,7 @@ imports.post('/', async (c) => {
   if (!companyId.success || !reportType.success) throw badRequest('company_id and report_type are required');
   const file = form.file;
   if (!(file instanceof File)) throw badRequest('file is required');
-  if (file.size > config().MAX_IMPORT_BYTES) throw badRequest('File is too large');
+  if (file.size > config().MAX_IMPORT_BYTES) throw badRequest(`File is too large (max ${Math.floor(config().MAX_IMPORT_BYTES / 1048576)} MB)`);
   const perm = IMPORT_PERMISSION[reportType.data];
   if (!(await can(c, perm, companyId.data))) throw forbidden(`Missing permission ${perm}`);
   let sourceId: string | null = null;
@@ -37,9 +37,10 @@ imports.post('/', async (c) => {
     const parsed = z.string().uuid().safeParse(form.source_id);
     if (!parsed.success) throw badRequest('invalid source_id');
     // The source must be visible to the user and belong to the same company (RLS-scoped read).
-    const { data } = await c.get('db').from('ingestion_sources').select('id, company_id, report_type').eq('id', parsed.data).maybeSingle();
-    const src = data as { id: string; company_id: string; report_type: string } | null;
+    const { data } = await c.get('db').from('ingestion_sources').select('id, company_id, report_type, active').eq('id', parsed.data).maybeSingle();
+    const src = data as { id: string; company_id: string; report_type: string; active: boolean } | null;
     if (!src || src.company_id !== companyId.data || src.report_type !== reportType.data) throw badRequest('Unknown ingestion source for this company and report type');
+    if (!src.active) throw badRequest('This source is paused');
     sourceId = src.id;
   }
   try {

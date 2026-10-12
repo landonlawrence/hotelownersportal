@@ -25,3 +25,11 @@ export function unwrap<T>(res: { data: T | null; error: { message: string; code?
   if (res.error) throw new DbError(res.error.message, res.error.code);
   return res.data as T;
 }
+
+/** A rejected or expired token: signing in again is the only way out. */
+export function isAuthError(e: unknown): boolean {
+  if (!e) return false;
+  const code = e instanceof DbError ? e.code : undefined;
+  const msg = e instanceof Error ? e.message : String(e);
+  return code === 'PGRST301' || code === 'PGRST302' || /\bJWT\b|invalid claim|token is expired/i.test(msg);
+}

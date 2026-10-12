@@ -1,14 +1,15 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { capexFunds, formatCurrency, formatPercent, REMAINING_FUNDS_DEFINITION, type PeriodView } from '@hop/core';
+import { capexFunds, formatCurrency, formatPercent, isIsoDate, maxIsoDate, REMAINING_FUNDS_DEFINITION, type PeriodView } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
-import { defaultAsOf, toTrendPoints, usePerformance, type TrendMetric } from '../lib/performance';
+import { defaultAsOf, requestedRange, toTrendPoints, usePerformance, type TrendMetric } from '../lib/performance';
+import { DownloadButton } from '../components/DownloadButton';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Notice, PageHeader, Segmented, StatusBadge, fmtDate, fmtMonth } from '../components/ui';
 import { CoverageBadge, FreshnessBadge, KpiCard, fmtKpi } from '../components/kpi';
 import { TrendChart } from '../components/TrendChart';
-import { PeriodFilter, PropertyMultiSelect } from '../components/filters';
+import { PeriodFilter, PropertyMultiSelect, localYesterday } from '../components/filters';
 import { downloadFromApi } from '../lib/api';
 
 const METRICS: Array<{ value: TrendMetric; label: string; kind: 'pct' | 'money_cents' | 'money' }> = [
@@ -24,14 +25,53 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
   const { properties: allProperties, canAny, can } = usePortal();
   const properties = useMemo(() => (propertyId ? allProperties.filter((p) => p.id === propertyId) : allProperties), [allProperties, propertyId]);
   const company = useCompany();
-  const [view, setView] = useState<PeriodView>('mtd');
-  const [asOf, setAsOf] = useState(defaultAsOf());
-  const [selected, setSelected] = useState<string[]>([]);
+  // Filters live in the URL so Back and reload restore them.
+  const [params, setParams] = useSearchParams();
+  const viewParam = params.get('view');
+  const view: PeriodView = viewParam === 'day' || viewParam === 'mtd' || viewParam === 'month' || viewParam === 'ytd' ? viewParam : 'mtd';
+  const asOfParam = params.get('asOf');
+  // Default to the hotels' latest closed business date; never accept a future date from the URL.
+  const businessDefault = defaultAsOf(properties);
+  const maxAsOf = maxIsoDate(localYesterday(), businessDefault);
+  const asOfValid = !!asOfParam && isIsoDate(asOfParam) && asOfParam <= maxAsOf;
+  const asOf = asOfValid ? asOfParam! : businessDefault;
+  const selected = useMemo(() => (params.get('props') ?? '').split(',').filter((id) => id && properties.some((p) => p.id === id)), [params, properties]);
+  const update = (patch: Record<string, string | null>) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [k, v] of Object.entries(patch)) {
+          if (v) next.set(k, v);
+          else next.delete(k);
+        }
+        return next;
+      },
+      { replace: false },
+    );
+  const setView = (v: PeriodView) => update({ view: v === 'mtd' ? null : v });
+  const setAsOf = (d: string) => update({ asOf: d === businessDefault || d > maxAsOf ? null : d });
+  // Drop an invalid or future asOf from the URL so links and Back stay clean.
+  useEffect(() => {
+    if (asOfParam && !asOfValid) {
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('asOf');
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [asOfParam, asOfValid, setParams]);
+  const setSelected = (ids: string[]) => update({ props: ids.length ? ids.join(',') : null });
   const [metric, setMetric] = useState<TrendMetric>('revpar');
   const scope = useMemo(() => (selected.length ? properties.filter((p) => selected.includes(p.id)) : properties), [properties, selected]);
   const perf = usePerformance({ companyId: company.company_id, properties: scope, view, asOf });
   const currency = scope[0]?.currency ?? 'USD';
   const d = perf.data;
+  // Header and export follow the selected view, not the (possibly previous) data on screen.
+  const requested = requestedRange(view, asOf, scope);
+  const stale = perf.isPlaceholderData || (perf.isFetching && !d);
   const m = METRICS.find((x) => x.value === metric)!;
   const showBudget = scope.some((p) => can('budgets.view', p.id));
 
@@ -41,19 +81,30 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
     <div className="stack">
       <PageHeader
         title={propertyId ? properties[0]?.name ?? 'Property' : 'Portfolio overview'}
-        subtitle={d ? `${VIEW_LABEL[view]} · ${fmtDate(d.range.from)} – ${fmtDate(d.range.to)} · daily figures are provisional` : company.company_name}
+        subtitle={
+          stale
+            ? `${VIEW_LABEL[view]} · Loading…`
+            : d
+              ? requested.comparable.inProgress && requested.comparable.to >= requested.range.from
+                ? `${VIEW_LABEL[view]} · ${fmtDate(requested.range.from)} – ${fmtDate(requested.comparable.to)} (${view === 'month' ? 'month' : 'period'} in progress) · daily figures are provisional`
+                : `${VIEW_LABEL[view]} · ${fmtDate(requested.range.from)} – ${fmtDate(requested.range.to)} · daily figures are provisional`
+              : company.company_name
+        }
         actions={
-          <button
-            className="btn"
-            disabled={!d}
-            onClick={() => d && downloadFromApi(`/exports/performance.csv?company_id=${company.company_id}&from=${d.range.from}&to=${d.range.to}&grain=total${(propertyId ? [propertyId] : selected).length ? `&property_ids=${(propertyId ? [propertyId] : selected).join(',')}` : ''}`, 'performance.csv')}
-          >
-            Export CSV
-          </button>
+          d && !stale ? (
+            <DownloadButton
+              label="Export CSV"
+              run={() => downloadFromApi(`/exports/performance.csv?company_id=${company.company_id}&from=${requested.range.from}&to=${requested.range.to}&grain=total${(propertyId ? [propertyId] : selected).length ? `&property_ids=${(propertyId ? [propertyId] : selected).join(',')}` : ''}`, 'performance.csv')}
+            />
+          ) : (
+            <button className="btn" disabled>
+              Export CSV
+            </button>
+          )
         }
       />
       <div className="filter-bar">
-        <PeriodFilter view={view} asOf={asOf} onView={setView} onAsOf={setAsOf} />
+        <PeriodFilter view={view} asOf={asOf} onView={setView} onAsOf={setAsOf} max={maxAsOf} />
         {!propertyId && <PropertyMultiSelect properties={properties} selected={selected} onChange={setSelected} />}
       </div>
 
@@ -83,13 +134,21 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
             </Notice>
           )}
           {d.priorRange.containsLeapDay && <Notice tone="info">This comparison spans 29 February; prior-year totals cover one day fewer/more. Ratios remain comparable.</Notice>}
-          <div className="grid grid-kpi">
-            <KpiCard label="Occupancy" value={d.current.kpis.occupancyPct} kind="pct" priorYear={d.prior.kpis.occupancyPct} budget={!showBudget ? undefined : d.budget?.occupancyPct ?? null} partial={d.current.partial} hint="Rooms sold ÷ available room nights" />
-            <KpiCard label="ADR" value={d.current.kpis.adr} kind="money_cents" currency={currency} priorYear={d.prior.kpis.adr} budget={!showBudget ? undefined : d.budget?.adr ?? null} partial={d.current.partial} hint="Room revenue ÷ rooms sold" />
-            <KpiCard label="RevPAR" value={d.current.kpis.revpar} kind="money_cents" currency={currency} priorYear={d.prior.kpis.revpar} budget={!showBudget ? undefined : d.budget?.revpar ?? null} partial={d.current.partial} hint="Room revenue ÷ available room nights" />
-            <KpiCard label="Room revenue" value={d.current.kpis.roomRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.roomRevenue} budget={!showBudget ? undefined : d.budget?.roomRevenue ?? null} partial={d.current.partial} comparisonNote={d.current.partial ? 'Comparisons hidden — incomplete period' : undefined} />
-            <KpiCard label="Total revenue" value={d.current.kpis.totalRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.totalRevenue} budget={!showBudget ? undefined : d.budget?.totalRevenue ?? null} partial={d.current.partial} comparisonNote={d.current.partial ? 'Comparisons hidden — incomplete period' : undefined} />
-          </div>
+          {(() => {
+            // Ratio comparisons are only like-for-like when every expected hotel-day is in.
+            const ratioNote = d.current.partial ? 'Comparisons hidden — not all hotels reported' : undefined;
+            const totalNote = d.current.partial ? 'Comparisons hidden — incomplete period' : undefined;
+            const bud = (v: number | null | undefined) => (!showBudget ? undefined : v ?? null);
+            return (
+              <div className="grid grid-kpi">
+                <KpiCard label="Occupancy" value={d.current.kpis.occupancyPct} kind="pct" priorYear={d.prior.kpis.occupancyPct} budget={bud(d.budget?.occupancyPct)} partial={d.current.partial} comparisonNote={ratioNote} hint="Rooms sold ÷ available room nights" />
+                <KpiCard label="ADR" value={d.current.kpis.adr} kind="money_cents" currency={currency} priorYear={d.prior.kpis.adr} budget={bud(d.budget?.adr)} partial={d.current.partial} comparisonNote={ratioNote} hint="Room revenue ÷ rooms sold" />
+                <KpiCard label="RevPAR" value={d.current.kpis.revpar} kind="money_cents" currency={currency} priorYear={d.prior.kpis.revpar} budget={bud(d.budget?.revpar)} partial={d.current.partial} comparisonNote={ratioNote} hint="Room revenue ÷ available room nights" />
+                <KpiCard label="Room revenue" value={d.current.kpis.roomRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.roomRevenue} budget={bud(d.budget?.roomRevenue)} partial={d.current.partial} comparisonNote={totalNote} />
+                <KpiCard label="Total revenue" value={d.current.kpis.totalRevenue} kind="money" currency={currency} priorYear={d.prior.kpis.totalRevenue} budget={bud(d.budget?.totalRevenue)} partial={d.current.partial} comparisonNote={totalNote} />
+              </div>
+            );
+          })()}
           {!d.budget && showBudget && <p className="small muted">Budget comparison unavailable: not every selected property has an approved budget for this period.</p>}
 
           <Card title={`${m.label} trend${d.trendGrain === 'day' ? ` — ${fmtMonth(asOf)}` : ' — trailing 12 months'}`} actions={<Segmented label="Trend metric" value={metric} onChange={setMetric} options={METRICS} />}>
@@ -120,6 +179,8 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
                     const bud = d.budgetByProperty.get(p.id);
                     const vsPy = cur.kpis.revpar !== null && py?.kpis.revpar ? cur.kpis.revpar / py.kpis.revpar - 1 : null;
                     const vsBud = cur.kpis.revpar !== null && bud?.revpar ? cur.kpis.revpar / bud.revpar - 1 : null;
+                    // Prior year and budget cover days this hotel hasn't reported yet: not comparable.
+                    const rowHidden = !cur.coverage.complete ? PARTIAL_PROPERTY_NOTE : undefined;
                     return (
                       <tr key={p.id}>
                         <td>
@@ -129,9 +190,9 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
                         <td className="num">{formatPercent(cur.kpis.occupancyPct)}</td>
                         <td className="num">{fmtKpi(cur.kpis.adr, 'money_cents', currency)}</td>
                         <td className="num">{fmtKpi(cur.kpis.revpar, 'money_cents', currency)}</td>
-                        <DeltaCell value={vsPy} />
-                        {showBudget && <DeltaCell value={vsBud} />}
-                        <td className="num">{fmtKpi(cur.kpis.roomRevenue, 'money', currency)}</td>
+                        <DeltaCell value={vsPy} hiddenNote={rowHidden} />
+                        {showBudget && <DeltaCell value={vsBud} hiddenNote={rowHidden} />}
+                        <td className="num">{formatCurrency(cur.kpis.roomRevenue, currency)}</td>
                         <td><CoverageBadge coverage={cur.coverage} /></td>
                         <td>{d.freshness.get(p.id) && <FreshnessBadge f={d.freshness.get(p.id)!} />}</td>
                       </tr>
@@ -145,9 +206,9 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
                       <td className="num">{formatPercent(d.current.kpis.occupancyPct)}</td>
                       <td className="num">{fmtKpi(d.current.kpis.adr, 'money_cents', currency)}</td>
                       <td className="num">{fmtKpi(d.current.kpis.revpar, 'money_cents', currency)}</td>
-                      <DeltaCell value={d.prior.kpis.revpar && d.current.kpis.revpar !== null ? d.current.kpis.revpar / d.prior.kpis.revpar - 1 : null} />
-                      {showBudget && <DeltaCell value={d.budget?.revpar && d.current.kpis.revpar !== null ? d.current.kpis.revpar / d.budget.revpar - 1 : null} />}
-                      <td className="num">{fmtKpi(d.current.kpis.roomRevenue, 'money', currency)}</td>
+                      <DeltaCell value={d.prior.kpis.revpar && d.current.kpis.revpar !== null ? d.current.kpis.revpar / d.prior.kpis.revpar - 1 : null} hiddenNote={d.current.partial ? PARTIAL_PORTFOLIO_NOTE : undefined} />
+                      {showBudget && <DeltaCell value={d.budget?.revpar && d.current.kpis.revpar !== null ? d.current.kpis.revpar / d.budget.revpar - 1 : null} hiddenNote={d.current.partial ? PARTIAL_PORTFOLIO_NOTE : undefined} />}
+                      <td className="num">{formatCurrency(d.current.kpis.roomRevenue, currency)}</td>
                       <td><CoverageBadge coverage={d.current.coverage} /></td>
                       <td />
                     </tr>
@@ -156,6 +217,7 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
               </table>
             </div>
             <p className="small muted" style={{ padding: '8px 16px' }}>
+              {d.current.partial && `${PARTIAL_PORTFOLIO_NOTE}. `}
               Portfolio ratios are calculated from summed rooms and revenue, never by averaging hotel percentages. Out-of-order rooms are excluded from availability and complimentary rooms from rooms sold unless a property is configured otherwise.
             </p>
           </Card>
@@ -254,7 +316,17 @@ function LatestCommentary() {
   );
 }
 
-function DeltaCell({ value }: { value: number | null }) {
+const PARTIAL_PORTFOLIO_NOTE = 'Comparison hidden: not all selected properties have reported every day';
+const PARTIAL_PROPERTY_NOTE = 'Comparison hidden: this property has not reported every day of the period';
+
+function DeltaCell({ value, hiddenNote }: { value: number | null; hiddenNote?: string }) {
+  if (hiddenNote) {
+    return (
+      <td className="num muted" title={hiddenNote}>
+        —<span className="sr-only"> ({hiddenNote})</span>
+      </td>
+    );
+  }
   if (value === null) return <td className="num">—</td>;
   return (
     <td className={`num ${value >= 0 ? 'delta-good' : 'delta-bad'}`}>

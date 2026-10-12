@@ -26,6 +26,15 @@ export interface IntakeResult {
   duplicateOfRunId?: string;
 }
 
+interface DupCandidate {
+  id: string;
+  status: string;
+  created_at: string;
+  period_start: string | null;
+  period_end: string | null;
+  property_ids: string[];
+}
+
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -44,7 +53,7 @@ export async function intakeFile(input: IntakeInput): Promise<IntakeResult> {
   const kind = fileKind(input.filename);
   if (!kind) throw new Error('Only CSV and XLSX files are supported');
   if (input.bytes.byteLength === 0) throw new Error('File is empty');
-  if (input.bytes.byteLength > cfg.MAX_IMPORT_BYTES) throw new Error(`File exceeds ${cfg.MAX_IMPORT_BYTES} bytes`);
+  if (input.bytes.byteLength > cfg.MAX_IMPORT_BYTES) throw new Error(`File is too large (max ${Math.floor(cfg.MAX_IMPORT_BYTES / 1048576)} MB)`);
   const svc = await serviceClient();
   const hash = sha256Hex(input.bytes);
   const now = new Date();
@@ -71,17 +80,36 @@ export async function intakeFile(input: IntakeInput): Promise<IntakeResult> {
     .single();
   if (fileErr) throw new Error(`record source file: ${fileErr.message}`);
 
-  // Duplicate detection: an identical file of the same type already loaded / in flight.
+  // Duplicate detection: an identical file of the same type already loaded / in
+  // flight. A completed earlier import only counts while it is still the latest
+  // word on its data: if a later import changed the same properties and dates,
+  // re-sending the original is a revision (restore) and goes through review.
   const { data: dupes } = await svc
     .from('import_runs')
-    .select('id, status, source_files!inner(sha256)')
+    .select('id, status, created_at, period_start, period_end, property_ids, source_files!inner(sha256)')
     .eq('company_id', input.companyId)
     .eq('report_type', input.reportType)
     .eq('source_files.sha256', hash)
     .in('status', ['queued', 'processing', 'needs_review', 'completed'])
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(1);
-  const dup = (dupes as Array<{ id: string }> | null)?.[0];
+  const prior = (dupes as Array<DupCandidate> | null)?.[0];
+  let dup: DupCandidate | undefined = prior;
+  if (prior && prior.status === 'completed' && prior.period_start && prior.period_end) {
+    const { data: later } = await svc
+      .from('import_runs')
+      .select('id, property_ids, rows_inserted, rows_updated')
+      .eq('company_id', input.companyId)
+      .eq('report_type', input.reportType)
+      .eq('status', 'completed')
+      .gt('created_at', prior.created_at)
+      .lte('period_start', prior.period_end)
+      .gte('period_end', prior.period_start);
+    const changed = ((later ?? []) as Array<{ property_ids: string[]; rows_inserted: number | null; rows_updated: number | null }>).some(
+      (r) => (r.rows_updated ?? 0) + (r.rows_inserted ?? 0) > 0 && r.property_ids.some((p) => prior.property_ids.includes(p)),
+    );
+    if (changed) dup = undefined;
+  }
 
   const { data: run, error: runErr } = await svc
     .from('import_runs')

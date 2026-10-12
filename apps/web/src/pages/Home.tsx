@@ -5,15 +5,24 @@ import { supabase } from '../lib/supabase';
 import { fetchMeta } from '../lib/api';
 import { usePortal, useCompany } from '../state/portal';
 import { Icon, type IconName } from '../components/icons';
-import { Card, Empty, Notice, PageHeader } from '../components/ui';
+import { Card, Empty, Loading, Notice, PageHeader } from '../components/ui';
+import { PropertiesErrorState } from '../components/NoProperties';
 import { OverviewPage } from './Overview';
 
 const DEFAULT_PRIMARY = '#1f3a5f';
 
-async function count(table: string, companyId: string): Promise<number> {
-  const { count: n } = await supabase.from(table).select('*', { count: 'exact', head: true }).eq('company_id', companyId);
-  return n ?? 0;
+/** Any branding change counts: logo, colour, sign-in headline or message, or a portal name of its own. */
+function brandingCustomised(b: ReturnType<typeof useCompany>['branding'], companyName: string): boolean {
+  if (!b) return false;
+  return (
+    !!(b.logo_url || b.logo_mark_url) ||
+    (!!b.primary_color && b.primary_color.toLowerCase() !== DEFAULT_PRIMARY) ||
+    !!b.login_headline?.trim() ||
+    !!b.login_message?.trim() ||
+    (!!b.portal_name && b.portal_name.trim() !== companyName.trim())
+  );
 }
+
 
 interface Step {
   id: string;
@@ -27,22 +36,23 @@ interface Step {
 
 /** Setup checklist for company administrators; disappears once everything is done. */
 export function GettingStarted({ compact = false }: { compact?: boolean }) {
-  const { ctx, properties, isCompanyAdmin } = usePortal();
+  const { properties, isCompanyAdmin } = usePortal();
   const company = useCompany();
   const id = company.company_id;
   const status = useQuery({
-    queryKey: ['setup-status', id, ctx?.aal, properties.length],
+    queryKey: ['setup-status', id, properties.length],
     enabled: isCompanyAdmin,
     queryFn: async () => {
-      const [factors, rooms, members, invites, sources, runs] = await Promise.all([
-        supabase.auth.mfa.listFactors(),
-        count('room_inventory_history', id),
-        count('company_memberships', id),
-        count('invitations', id),
-        count('ingestion_sources', id),
-        count('import_runs', id),
-      ]);
-      return { mfa: (factors.data?.totp ?? []).some((f) => f.status === 'verified'), rooms, team: members + invites, data: sources + runs };
+      // Counts come from one RPC that works before 2FA, so steps don't flip after verifying.
+      const [factors, res] = await Promise.all([supabase.auth.mfa.listFactors(), supabase.rpc('company_setup_status', { p_company_id: id })]);
+      const c = (res.data ?? {}) as { rooms?: number; other_members?: number; pending_invitations?: number; sources?: number; import_runs?: number };
+      return {
+        mfa: (factors.data?.totp ?? []).some((f) => f.status === 'verified'),
+        rooms: c.rooms ?? 0,
+        // Your own (accepted) invitation doesn't count: other members or invitations still pending.
+        team: (c.other_members ?? 0) + (c.pending_invitations ?? 0),
+        data: (c.sources ?? 0) + (c.import_runs ?? 0),
+      };
     },
   });
   const meta = useQuery({ queryKey: ['api-meta'], staleTime: 60_000, queryFn: fetchMeta, retry: false });
@@ -87,13 +97,13 @@ export function GettingStarted({ compact = false }: { compact?: boolean }) {
     {
       id: 'brand', icon: 'palette', title: 'Brand your portal',
       detail: 'Logo, colours and the sign-in message your owners see.',
-      done: !!(b?.logo_url || b?.logo_mark_url) || (!!b?.primary_color && b.primary_color.toLowerCase() !== DEFAULT_PRIMARY),
+      done: brandingCustomised(b, company.company_name),
       action: { label: 'Edit branding', to: '/admin?tab=branding' },
     },
     {
       id: 'team', icon: 'users', title: 'Invite your team and owners',
       detail: 'Choose each person’s role and which hotels they can see.',
-      done: status.data.team > 1,
+      done: status.data.team > 0,
       action: { label: 'Invite people', to: '/admin?tab=invitations' },
       note: meta.data && !meta.data.emailEnabled ? 'Email sending isn’t set up yet, so the invitation link is shown to you to send yourself.' : undefined,
     },
@@ -151,10 +161,11 @@ export function GettingStarted({ compact = false }: { compact?: boolean }) {
 }
 
 export function HomePage() {
-  const { ctx, properties, canAny, isCompanyAdmin } = usePortal();
+  const { ctx, properties, propertiesError, propertiesLoading, refetchProperties, canAny, isCompanyAdmin } = usePortal();
   const company = useCompany();
   const firstName = ctx?.full_name?.split(' ')[0];
   const canSeePerformance = canAny('performance.view') && company.modules.performance !== false;
+  if (propertiesLoading) return <Loading />;
 
   if (properties.length > 0 && canSeePerformance) {
     return (
@@ -168,7 +179,11 @@ export function HomePage() {
   return (
     <div className="stack">
       <PageHeader title={firstName ? `Welcome, ${firstName}` : 'Welcome'} subtitle={company.branding?.portal_name ?? company.company_name} />
-      {isCompanyAdmin ? (
+      {propertiesError ? (
+        <Card>
+          <PropertiesErrorState error={propertiesError} retry={() => void refetchProperties()} />
+        </Card>
+      ) : isCompanyAdmin ? (
         <GettingStarted />
       ) : (
         <Card>

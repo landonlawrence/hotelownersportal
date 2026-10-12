@@ -62,6 +62,20 @@ export const PERMISSIONS = {
 export type Permission = keyof typeof PERMISSIONS;
 export const PERMISSION_KEYS = Object.keys(PERMISSIONS) as Permission[];
 
+/**
+ * Permissions that are never given to owners or investors through allow
+ * overrides (mirrors app.is_internal_only_permission in the database).
+ */
+export function isInternalOnlyPermission(perm: string): boolean {
+  return (
+    perm.startsWith('admin.') ||
+    [
+      'audit.view', 'ingestion.manage', 'financials.view_draft', 'financials.edit', 'financials.publish', 'budgets.edit',
+      'reports.edit', 'reports.publish', 'documents.manage', 'documents.view_internal', 'commentary.view_internal', 'commentary.edit',
+    ].includes(perm)
+  );
+}
+
 export type DocumentVisibility = 'general' | 'owner' | 'internal' | 'confidential';
 
 export const DOCUMENT_VISIBILITY_PERMISSION: Record<DocumentVisibility, Permission> = {
@@ -77,6 +91,22 @@ export const DOCUMENT_VISIBILITY_LABELS: Record<DocumentVisibility, string> = {
   internal: 'Internal (management)',
   confidential: 'Confidential',
 };
+
+/** Most restrictive first. */
+export const DOCUMENT_VISIBILITY_RESTRICTIVENESS: DocumentVisibility[] = ['confidential', 'internal', 'owner', 'general'];
+
+/**
+ * Pick the visibility to use when the wanted one (e.g. a category default) isn't allowed:
+ * the closest allowed value that is no broader than the wanted one, otherwise the most
+ * restrictive allowed value. Never widens the audience when a narrower option exists.
+ */
+export function clampVisibility(wanted: DocumentVisibility, allowed: readonly DocumentVisibility[]): DocumentVisibility | undefined {
+  if (allowed.includes(wanted)) return wanted;
+  const order = DOCUMENT_VISIBILITY_RESTRICTIVENESS;
+  const rank = order.indexOf(wanted);
+  const narrower = order.slice(0, rank).reverse().find((v) => allowed.includes(v));
+  return narrower ?? order.find((v) => allowed.includes(v));
+}
 
 /** Client-side helper for UI gating. */
 export class PermissionSet {

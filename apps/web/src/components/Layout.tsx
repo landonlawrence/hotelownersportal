@@ -1,11 +1,12 @@
-import { Suspense, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ROLE_LABELS, type Permission, type Role } from '@hop/core';
 import { supabase } from '../lib/supabase';
 import { usePortal, useCompany } from '../state/portal';
 import { Icon, type IconName } from './icons';
 import { Loading } from './ui';
+import { useSectionState } from './RequirePermission';
 
 interface NavItem {
   to: string;
@@ -29,14 +30,14 @@ const GROUPS: Array<{ label?: string; items: NavItem[] }> = [
     items: [
       { to: '/financials', label: 'Budgets & Financials', icon: 'money', perms: ['financials.view', 'budgets.view', 'financials.view_draft'], module: 'financials' },
       { to: '/capex', label: 'CapEx', icon: 'tool', perms: ['capex.view'], module: 'capex' },
-      { to: '/reports', label: 'Owner Reports', icon: 'report', perms: ['reports.view'], module: 'reports' },
+      { to: '/reports', label: 'Owner Reports', icon: 'report', perms: ['reports.view', 'reports.edit'], module: 'reports' },
     ],
   },
   {
     label: 'Files & data',
     items: [
-      { to: '/documents', label: 'Documents', icon: 'folder', perms: ['documents.view', 'documents.view_owner', 'documents.upload'], module: 'documents' },
-      { to: '/imports', label: 'Data Imports', icon: 'upload', perms: ['ingestion.view'], module: 'ingestion' },
+      { to: '/documents', label: 'Documents', icon: 'folder', perms: ['documents.view', 'documents.view_owner', 'documents.view_internal', 'documents.view_confidential', 'documents.upload', 'documents.manage'], module: 'documents' },
+      { to: '/imports', label: 'Data Imports', icon: 'upload', perms: ['ingestion.view', 'ingestion.manage', 'financials.edit', 'budgets.edit'], module: 'ingestion' },
     ],
   },
   {
@@ -52,10 +53,44 @@ const GROUPS: Array<{ label?: string; items: NavItem[] }> = [
 type ItemState = 'open' | 'locked' | 'hidden';
 
 export function Layout() {
-  const { ctx, company, setCompanyId, canAny, mfaLocked } = usePortal();
+  const { ctx, company, setCompanyId, refresh } = usePortal();
+  const [ending, setEnding] = useState(false);
+  const endSupport = async () => {
+    if (!c.support_session_id || !window.confirm('End this support session now? Access to this company stops immediately.')) return;
+    setEnding(true);
+    await supabase.rpc('end_support_session', { p_session_id: c.support_session_id });
+    setEnding(false);
+    navigate('/');
+    await refresh();
+  };
+  const sectionState = useSectionState();
   const c = useCompany();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  const narrow = useNarrow();
+  const asideRef = useRef<HTMLElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  // Phone-width drawer: closed = inert (not focusable); open = focus the first link, Escape closes.
+  useEffect(() => {
+    const el = asideRef.current;
+    if (!el) return;
+    if (narrow && !open) el.setAttribute('inert', '');
+    else el.removeAttribute('inert');
+  }, [narrow, open]);
+  useEffect(() => {
+    if (!open) return;
+    asideRef.current?.querySelector<HTMLElement>('nav a')?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      toggleRef.current?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+  useEffect(() => {
+    if (!narrow) setOpen(false);
+  }, [narrow]);
   const unread = useQuery({
     queryKey: ['unread', c.company_id],
     refetchInterval: 60_000,
@@ -67,20 +102,15 @@ export function Layout() {
 
   // Shown when granted on any property or company-wide (so admins see sections before hotels exist);
   // locked (not hidden) when the only thing missing is a 2FA-verified session.
-  const state = (n: NavItem): ItemState => {
-    if (n.module && c.modules[n.module] === false) return 'hidden';
-    if (!n.perms) return 'open';
-    if (n.perms.some((p) => canAny(p) || c.company_permissions.includes(p))) return 'open';
-    if (n.perms.some((p) => mfaLocked(p))) return 'locked';
-    return 'hidden';
-  };
+  const state = (n: NavItem): ItemState => sectionState(n.perms, n.module);
   const initials = (ctx?.full_name ?? ctx?.email ?? '?').split(/[\s@.]+/).filter(Boolean).map((s) => s[0]).join('').slice(0, 2).toUpperCase();
   const blocked = c.mfa_blocked_permissions.length > 0;
   const portalName = c.branding?.portal_name ?? c.company_name;
 
   return (
     <div className={`shell ${open ? 'nav-open' : ''}`}>
-      <aside className="sidebar" aria-label="Main navigation">
+      <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
+      <aside className="sidebar" id="sidebar" aria-label="Main navigation" ref={asideRef}>
         <div className="brand">
           {c.branding?.logo_mark_url ? <img src={c.branding.logo_mark_url} alt="" /> : <span className="brand-mark" aria-hidden>{portalName.slice(0, 1).toUpperCase()}</span>}
           <span className="brand-name">{portalName}</span>
@@ -120,10 +150,16 @@ export function Layout() {
       <div className="main">
         {company?.is_demo && <div className="demo-banner">DEMO DATA — all companies, properties, people and figures shown here are fictional.</div>}
         {c.access === 'support_session' && (
-          <div className="support-banner">Read-only support session (audited) — expires {new Date(c.support_expires_at!).toLocaleString()}</div>
+          <div className="support-banner row" style={{ justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <span>Read-only support session (audited) — expires {new Date(c.support_expires_at!).toLocaleString()}</span>
+            <span className="row" style={{ gap: 6 }}>
+              <Link className="btn btn-sm" to="/admin?tab=platform">Back to platform console</Link>
+              <button className="btn btn-sm" disabled={ending} onClick={() => void endSupport()}>{ending ? 'Ending…' : 'End support session'}</button>
+            </span>
+          </div>
         )}
         <header className="topbar">
-          <button className="btn btn-ghost menu-toggle" aria-label="Open navigation" onClick={() => setOpen((o) => !o)}>
+          <button ref={toggleRef} className="btn btn-ghost menu-toggle" aria-label={open ? 'Close navigation' : 'Open navigation'} aria-expanded={open} aria-controls="sidebar" onClick={() => setOpen((o) => !o)}>
             <Icon name="menu" />
           </button>
           {ctx && ctx.companies.length > 1 && (
@@ -152,7 +188,7 @@ export function Layout() {
             <Icon name="logout" size={16} /> <span className="hide-sm">Sign out</span>
           </button>
         </header>
-        <main className="content" id="main">
+        <main className="content" id="main" tabIndex={-1}>
           <Suspense fallback={<Loading />}>
             <Outlet />
           </Suspense>
@@ -160,4 +196,20 @@ export function Layout() {
       </div>
     </div>
   );
+}
+
+const NARROW = '(max-width: 900px)';
+
+/** Whether the off-canvas (phone-width) navigation is in use. */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(NARROW).matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.(NARROW);
+    if (!mq) return;
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return narrow;
 }

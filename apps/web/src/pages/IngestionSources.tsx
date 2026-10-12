@@ -4,7 +4,7 @@ import { listParsers } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
 import { fetchMeta } from '../lib/api';
 import { usePortal, useCompany } from '../state/portal';
-import { Card, Empty, Loading, Modal, Notice, StatusBadge, errorMessage } from '../components/ui';
+import { Card, Empty, Loading, Modal, Notice, StatusBadge, confirmAction, dbErrorMessage } from '../components/ui';
 
 const TYPE_LABEL: Record<string, string> = { daily_performance: 'Daily performance', monthly_actuals: 'Monthly actuals', budget: 'Budget' };
 
@@ -58,8 +58,12 @@ function NewSource({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState({ name: '', channel: 'email', report_type: 'daily_performance', revision_policy: 'require_review', expected_cadence: 'daily', expected_by_local: '11:00', expected_by_day: 15 });
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const dayOk = f.expected_cadence !== 'monthly' || (Number.isInteger(f.expected_by_day) && f.expected_by_day >= 1 && f.expected_by_day <= 28);
+  const nameOk = f.name.trim().length >= 3 && f.name.trim().length <= 120;
   const save = async () => {
     setErr(null);
+    setBusy(true);
     const parser = listParsers().find((p) => p.reportType === f.report_type)!.key;
     const { data, error } = await supabase.from('ingestion_sources').insert({
       company_id: company.company_id, name: f.name.trim(), channel: f.channel, report_type: f.report_type, parser_key: parser,
@@ -67,9 +71,14 @@ function NewSource({ onClose }: { onClose: () => void }) {
       expected_by_local: f.expected_cadence === 'daily' ? f.expected_by_local : null,
       expected_by_day: f.expected_cadence === 'monthly' ? f.expected_by_day : null,
     }).select('id').single();
-    if (error) return setErr(error.message);
+    if (error) {
+      setBusy(false);
+      return setErr(error.code === '23505' ? 'A source with this name already exists.' : dbErrorMessage(error));
+    }
     if (f.channel === 'email') await supabase.rpc('rotate_ingestion_route_token', { p_source_id: (data as { id: string }).id });
-    await qc.invalidateQueries({ queryKey: ['ingestion-sources-full'] });
+    setBusy(false);
+    // The Imports upload dialog lists sources under 'ingestion-sources'.
+    await qc.invalidateQueries({ predicate: (q) => ['ingestion-sources-full', 'ingestion-sources'].includes(String(q.queryKey[0])) });
     onClose();
   };
   return (
@@ -81,8 +90,9 @@ function NewSource({ onClose }: { onClose: () => void }) {
       <label className="field">When values for already-loaded dates change<select value={f.revision_policy} onChange={(e) => setF({ ...f, revision_policy: e.target.value })}><option value="require_review">Hold for review</option><option value="replace">Replace automatically (history kept)</option></select></label>
       <label className="field">Expected cadence (missing-report alerts)<select value={f.expected_cadence} onChange={(e) => setF({ ...f, expected_cadence: e.target.value })}><option value="none">None</option><option value="daily">Daily</option><option value="monthly">Monthly</option></select></label>
       {f.expected_cadence === 'daily' && <label className="field">Due by (property-local time)<input type="time" value={f.expected_by_local} onChange={(e) => setF({ ...f, expected_by_local: e.target.value })} /></label>}
-      {f.expected_cadence === 'monthly' && <label className="field">Due by day of following month<input type="number" min={1} max={28} value={f.expected_by_day} onChange={(e) => setF({ ...f, expected_by_day: Number(e.target.value) })} /></label>}
-      <button className="btn btn-primary" disabled={f.name.trim().length < 3} onClick={save}>Create source</button>
+      {f.expected_cadence === 'monthly' && <label className="field">Due by day of following month<input type="number" min={1} max={28} value={f.expected_by_day} onChange={(e) => setF({ ...f, expected_by_day: Number(e.target.value) })} />{!dayOk && <span className="field-error">Choose a day from 1 to 28.</span>}</label>}
+      {f.channel === 'email' && <p className="small muted">After creating it, map the property codes your PMS uses — emails to this source are rejected until you do.</p>}
+      <button className="btn btn-primary" disabled={busy || !nameOk || !dayOk} onClick={() => void save()}>{busy ? 'Creating…' : 'Create source'}</button>
     </Modal>
   );
 }
@@ -102,22 +112,31 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
     queryFn: async () => unwrap(await supabase.from('ingestion_property_mappings').select('id, external_code, property_id').eq('source_id', source.id).order('external_code')) as Array<{ id: string; external_code: string; property_id: string }>,
   });
   const [sender, setSender] = useState('');
-  const [map, setMap] = useState({ code: '', property: properties[0]?.id ?? '' });
-  const refresh = () => qc.invalidateQueries({ predicate: (q) => ['route', 'mappings-src', 'ingestion-sources-full'].includes(String(q.queryKey[0])) });
-  const run = async (p: PromiseLike<{ error: { message: string } | null }>) => {
+  // No default property: a code must be mapped to a hotel the user chose.
+  const [map, setMap] = useState({ code: '', property: '' });
+  const refresh = () => qc.invalidateQueries({ predicate: (q) => ['route', 'mappings-src', 'ingestion-sources-full', 'ingestion-sources'].includes(String(q.queryKey[0])) });
+  /** Runs a write; returns true on success so inputs are only cleared when it worked. */
+  const run = async (p: PromiseLike<{ error: { message: string; code?: string } | null }>, duplicate?: string): Promise<boolean> => {
     setErr(null);
     const { error } = await p;
-    if (error) setErr(error.message);
+    if (error) setErr(error.code === '23505' && duplicate ? duplicate : dbErrorMessage(error));
     await refresh();
+    return !error;
   };
   const senders = route.data?.allowed_senders ?? [];
-  const validSender = /^(@[a-z0-9.-]+\.[a-z]{2,}|[^@\s]+@[a-z0-9.-]+\.[a-z]{2,})$/i.test(sender.trim());
+  // One address, or a whole domain written as @domain; labels can't start or end with a dash.
+  const label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+  const validSender = new RegExp(`^(?:@|[a-z0-9._%+-]+@)(?:${label}\\.)+[a-z]{2,}$`, 'i').test(sender.trim());
+  const normalisedCode = map.code.trim().toUpperCase();
   return (
     <Modal title={`Configure: ${source.name}`} onClose={onClose}>
-      {err && <Notice tone="bad">{errorMessage(err)}</Notice>}
+      {err && <Notice tone="bad">{err}</Notice>}
+      {source.channel === 'email' && mappings.data && mappings.data.length === 0 && (
+        <Notice tone="warn">Emails to this source will be rejected until you map property codes below.</Notice>
+      )}
       <div className="row">
-        <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={source.active} onChange={(e) => run(supabase.from('ingestion_sources').update({ active: e.target.checked }).eq('id', source.id))} /> Active</label>
-        <select aria-label="Revision policy" value={source.revision_policy} onChange={(e) => run(supabase.from('ingestion_sources').update({ revision_policy: e.target.value }).eq('id', source.id))}>
+        <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={source.active} onChange={(e) => void run(supabase.from('ingestion_sources').update({ active: e.target.checked }).eq('id', source.id))} /> Active</label>
+        <select aria-label="Revision policy" value={source.revision_policy} onChange={(e) => void run(supabase.from('ingestion_sources').update({ revision_policy: e.target.value }).eq('id', source.id))}>
           <option value="require_review">Hold revisions for review</option><option value="replace">Replace revisions automatically</option>
         </select>
       </div>
@@ -127,23 +146,23 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
           {route.data ? (
             <div className="stack" style={{ gap: 8 }}>
               <div><span className="small muted">Inbound address</span><br /><code>reports+{route.data.inbound_token}@{meta.data?.inboundEmailDomain ?? '…'}</code></div>
-              <button className="btn btn-sm" style={{ width: 'fit-content' }} onClick={() => window.confirm('Rotate the address? The old address stops working immediately.') && run(supabase.rpc('rotate_ingestion_route_token', { p_source_id: source.id }))}>Rotate address</button>
+              <button className="btn btn-sm" style={{ width: 'fit-content' }} onClick={() => confirmAction('Rotate the address? The old address stops working immediately.') && void run(supabase.rpc('rotate_ingestion_route_token', { p_source_id: source.id }))}>Rotate address</button>
               <div>
                 <span className="small muted">Allowed senders (an email must match one of these and pass SPF or DKIM)</span>
                 <ul className="timeline">
                   {senders.map((s) => (
-                    <li key={s} className="spread"><code>{s}</code><button className="btn btn-sm btn-danger" onClick={() => run(supabase.from('ingestion_source_routes').update({ allowed_senders: senders.filter((x) => x !== s) }).eq('source_id', source.id))}>Remove</button></li>
+                    <li key={s} className="spread"><code>{s}</code><button className="btn btn-sm btn-danger" onClick={() => void run(supabase.from('ingestion_source_routes').update({ allowed_senders: senders.filter((x) => x !== s) }).eq('source_id', source.id))}>Remove</button></li>
                   ))}
                   {senders.length === 0 && <li className="muted">No senders allowed — all email to this address is rejected.</li>}
                 </ul>
                 <div className="row">
                   <input aria-label="Allowed sender" placeholder="nightaudit@hotel.com or @pms.vendor.com" value={sender} onChange={(e) => setSender(e.target.value)} />
-                  <button className="btn btn-sm" disabled={!validSender} onClick={() => run(supabase.from('ingestion_source_routes').update({ allowed_senders: [...new Set([...senders, sender.trim().toLowerCase()])] }).eq('source_id', source.id)).then(() => setSender(''))}>Add sender</button>
+                  <button className="btn btn-sm" disabled={!validSender} onClick={() => void run(supabase.from('ingestion_source_routes').update({ allowed_senders: [...new Set([...senders, sender.trim().toLowerCase()])] }).eq('source_id', source.id)).then((ok) => ok && setSender(''))}>Add sender</button>
                 </div>
               </div>
-              <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={route.data.require_spf_dkim_pass} onChange={(e) => run(supabase.from('ingestion_source_routes').update({ require_spf_dkim_pass: e.target.checked }).eq('source_id', source.id))} /> Require SPF or DKIM pass (recommended)</label>
+              <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={route.data.require_spf_dkim_pass} onChange={(e) => void run(supabase.from('ingestion_source_routes').update({ require_spf_dkim_pass: e.target.checked }).eq('source_id', source.id))} /> Require SPF or DKIM pass (recommended)</label>
             </div>
-          ) : <button className="btn btn-sm" onClick={() => run(supabase.rpc('rotate_ingestion_route_token', { p_source_id: source.id }))}>Create inbound address</button>}
+          ) : <button className="btn btn-sm" onClick={() => void run(supabase.rpc('rotate_ingestion_route_token', { p_source_id: source.id }))}>Create inbound address</button>}
         </>
       )}
       <h3>Property code mappings</h3>
@@ -151,14 +170,14 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
       <table className="data">
         <tbody>
           {(mappings.data ?? []).map((m) => (
-            <tr key={m.id}><td><code>{m.external_code}</code></td><td>{properties.find((p) => p.id === m.property_id)?.name ?? '—'}</td><td><button className="btn btn-sm btn-danger" onClick={() => run(supabase.from('ingestion_property_mappings').delete().eq('id', m.id))}>Remove</button></td></tr>
+            <tr key={m.id}><td><code>{m.external_code}</code></td><td>{properties.find((p) => p.id === m.property_id)?.name ?? '—'}</td><td><button className="btn btn-sm btn-danger" onClick={() => void run(supabase.from('ingestion_property_mappings').delete().eq('id', m.id))}>Remove</button></td></tr>
           ))}
         </tbody>
       </table>
       <div className="row">
         <input aria-label="External code" placeholder="Code in report" value={map.code} onChange={(e) => setMap({ ...map, code: e.target.value })} />
-        <select aria-label="Property" value={map.property} onChange={(e) => setMap({ ...map, property: e.target.value })}>{properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-        <button className="btn btn-sm" disabled={!map.code.trim()} onClick={() => run(supabase.from('ingestion_property_mappings').insert({ company_id: company.company_id, source_id: source.id, external_code: map.code.trim(), property_id: map.property })).then(() => setMap({ ...map, code: '' }))}>Add mapping</button>
+        <select aria-label="Property" value={map.property} onChange={(e) => setMap({ ...map, property: e.target.value })}><option value="">Select property…</option>{properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        <button className="btn btn-sm" disabled={!normalisedCode || !map.property} onClick={() => void run(supabase.from('ingestion_property_mappings').insert({ company_id: company.company_id, source_id: source.id, external_code: normalisedCode, property_id: map.property }), `Code ${normalisedCode} is already mapped for this source (codes are not case-sensitive).`).then((ok) => ok && setMap({ code: '', property: '' }))}>Add mapping</button>
       </div>
     </Modal>
   );
