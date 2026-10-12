@@ -45,6 +45,7 @@ export function GettingStarted({ compact = false }: { compact?: boolean }) {
     queryFn: async () => {
       // Counts come from one RPC that works before 2FA, so steps don't flip after verifying.
       const [factors, res] = await Promise.all([supabase.auth.mfa.listFactors(), supabase.rpc('company_setup_status', { p_company_id: id })]);
+      if (res.error) throw res.error;
       const c = (res.data ?? {}) as { rooms?: number; other_members?: number; pending_invitations?: number; sources?: number; import_runs?: number };
       return {
         mfa: (factors.data?.totp ?? []).some((f) => f.status === 'verified'),

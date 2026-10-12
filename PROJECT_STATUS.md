@@ -55,6 +55,18 @@ Required verification coverage: cross-company/cross-property denial ✔, direct 
 - Supabase Auth for staging matches local: sign-ups ON (the invitation page creates the account), email confirmation OFF. Accounts without a membership see nothing (RLS). **Before production:** create invited users server-side (Auth admin invite) so public sign-up can be turned off and the email is verified by the invite link itself.
 - Not configured yet: service-role key in Secrets Manager, first platform admin, SES (no email; invitation links are shown to the inviter), custom domain, malware scanning, WAF.
 
+## QA team rounds 1–2 (2026-10-12)
+
+Eight exploratory testers (5 in round 1, 3 in round 2) used the local app as every role: 121 findings, 81 fixed with regression tests, 179 passing scenarios. Migrations `20261012000800_qa_round1.sql` and `20261012000900_qa_round2.sql`. An independent review then removed data-destructive cleanup from the migrations (they now stop with a clear error on inconsistent CapEx rows instead of deleting), deduplicated package revisions, limited notifications to active members, and moved the commitment-on-same-project rule into a trigger.
+
+Behaviour changes to know on staging/production:
+- Platform-admin writes (provisioning, branding, domains, modules) and support sessions need a 2FA-verified session; enrol TOTP under Account security.
+- New companies get default reporting accounts and document categories.
+- CapEx requests are refused when no eligible approver exists (e.g. a company with a single corporate user).
+- Password reset uses `/reset-password`; the portal origin must be in Supabase Auth redirect URLs.
+
+Deferred (need product decisions): CapEx threshold and ownership-group admin screens; chart-of-accounts/category editor; automatic tenant subdomains and custom-domain verification; reissuing a lost company-admin invitation; restating history after retroactive room-inventory changes; custom date ranges; lost-authenticator recovery; package editing UI; archive/delete for rejected uploads; pre-signup invitation check; commentary approval step.
+
 ## Defects found and fixed during verification
 
 - Default privileges granted new tables to `anon` → default privileges revoked globally; test asserts no `anon` grants and RLS on every table.

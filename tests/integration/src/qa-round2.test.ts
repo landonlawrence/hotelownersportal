@@ -75,6 +75,20 @@ describe('R2-03 owner packages never include documents without a released versio
       expect(JSON.stringify(forOwner)).not.toContain('QA R2 infected attachment');
       expect((forOwner.snapshot.documents as Array<{ document_id: string }>).map((d) => d.document_id)).toEqual([GENERAL_DOC]);
 
+      // Historical duplicate document items in a published package (written before the uniqueness trigger existed).
+      const client = await sql().connect();
+      try {
+        await client.query('begin');
+        await client.query('set local session_replication_role = replica');
+        await client.query(
+          "insert into public.reporting_package_items (company_id, package_id, item_type, ref_id, title, sort_order) values ($1, $2, 'document', $3, 'legacy duplicate', 70)",
+          [COMPANY.harborview, pkg, GENERAL_DOC],
+        );
+        await client.query('commit');
+      } finally {
+        client.release();
+      }
+
       const { data: rev, error: revErr } = await fin.db.rpc('create_reporting_package_revision', { p_package_id: pkg, p_reason: 'QA correction' });
       expect(revErr).toBeNull();
       const { data: revItems } = await svc.from('reporting_package_items').select('ref_id').eq('package_id', rev).eq('item_type', 'document');

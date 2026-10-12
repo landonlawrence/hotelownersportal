@@ -44,7 +44,10 @@ declare
   v_portal text;
   v_email text;
 begin
-  if p_user_id is null then return; end if;
+  if p_user_id is null or not exists (select 1 from public.company_memberships m
+                                     where m.company_id = p_company_id and m.user_id = p_user_id and m.status = 'active') then
+    return;
+  end if;
   select email into v_email from public.profiles where id = p_user_id;
   select coalesce(b.email_from_name, c.name), coalesce(b.portal_name, c.name) into v_from, v_portal
   from public.companies c left join public.company_branding b on b.company_id = c.id where c.id = p_company_id;
@@ -293,14 +296,20 @@ grant execute on function public.provision_company(text, text, text, text) to au
 -- R1-02 CapEx rows must belong to the same property as their project
 -- R1-53 Quotes and commitments are positive amounts
 -- =============================================================================
--- Remove rows that point at another property's project (QA injections).
-update public.capex_transactions t set related_commitment_id = null
- where related_commitment_id in (select t2.id from public.capex_transactions t2 join public.capex_projects p on p.id = t2.project_id
-                                 where p.property_id <> t2.property_id);
-delete from public.capex_transactions t using public.capex_projects p where p.id = t.project_id and p.property_id <> t.property_id;
-delete from public.capex_updates u using public.capex_projects p where p.id = u.project_id and p.property_id <> u.property_id;
-delete from public.capex_transactions where reference = 'xprop';
-delete from public.capex_updates where body = 'injected update';
+-- Existing rows must already satisfy the new constraints. Stop with a clear message
+-- rather than deleting anyone's data; fix offending rows by hand and re-run.
+do $$
+begin
+  if exists (select 1 from public.capex_transactions t join public.capex_projects p on p.id = t.project_id where p.property_id <> t.property_id)
+     or exists (select 1 from public.capex_updates u join public.capex_projects p on p.id = u.project_id where p.property_id <> u.property_id)
+     or exists (select 1 from public.capex_approval_requests r join public.capex_projects p on p.id = r.project_id where p.property_id <> r.property_id) then
+    raise exception 'capex rows reference a project on another property; correct them before applying this migration';
+  end if;
+  if exists (select 1 from public.capex_transactions where kind in ('quote', 'commitment') and amount <= 0) then
+    raise exception 'capex quotes/commitments with zero or negative amounts exist; correct them before applying this migration';
+  end if;
+end;
+$$;
 
 alter table public.capex_projects add constraint capex_projects_id_company_property_key unique (id, company_id, property_id);
 alter table public.capex_transactions drop constraint capex_transactions_project_id_company_id_fkey;
@@ -313,9 +322,6 @@ alter table public.capex_approval_requests drop constraint capex_approval_reques
 alter table public.capex_approval_requests add constraint capex_approval_requests_project_fkey
   foreign key (project_id, company_id, property_id) references public.capex_projects (id, company_id, property_id) on delete cascade;
 
-update public.capex_transactions set related_commitment_id = null
- where related_commitment_id in (select id from public.capex_transactions where kind in ('quote', 'commitment') and amount <= 0);
-delete from public.capex_transactions where kind in ('quote', 'commitment') and amount <= 0;
 alter table public.capex_transactions add constraint capex_transactions_positive_quotes_commitments
   check (kind = 'actual' or amount > 0);
 
@@ -325,6 +331,23 @@ create policy capex_tx_write on public.capex_transactions for insert to authenti
               and created_by = (select auth.uid())
               and exists (select 1 from public.capex_projects p
                           where p.id = capex_transactions.project_id and p.property_id = capex_transactions.property_id));
+-- Spend may only settle a commitment on the same project (a trigger: a policy reading
+-- capex_transactions from its own policy would recurse).
+create or replace function app.capex_commitment_same_project() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.related_commitment_id is not null and not exists (
+    select 1 from public.capex_transactions c
+    where c.id = new.related_commitment_id and c.project_id = new.project_id and c.kind = 'commitment') then
+    raise exception 'the related commitment must belong to the same project' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+revoke execute on function app.capex_commitment_same_project() from public, anon, authenticated;
+create trigger capex_transactions_commitment_same_project before insert or update of related_commitment_id, project_id
+  on public.capex_transactions for each row execute function app.capex_commitment_same_project();
+
 drop policy capex_tx_update on public.capex_transactions;
 create policy capex_tx_update on public.capex_transactions for update to authenticated
   using (property_id = any ((select app.permitted_property_ids('capex.edit'))::uuid[]))
@@ -474,16 +497,6 @@ create policy commentary_write on public.management_commentary for all to authen
          or (property_id is null and app.has_company_wide_permission('commentary.edit', company_id)))
   with check ((property_id is not null and property_id = any ((select app.permitted_property_ids('commentary.edit'))::uuid[]))
          or (property_id is null and app.has_company_wide_permission('commentary.edit', company_id)));
-
--- Remove company-wide rows written by property-scoped members during QA.
-delete from public.management_commentary mc
- where mc.property_id is null and mc.created_by is not null
-   and not exists (select 1 from public.company_memberships m where m.company_id = mc.company_id and m.user_id = mc.created_by
-                   and m.status = 'active' and m.all_properties);
-update public.documents d set status = 'archived'
- where d.property_id is null and d.created_by is not null and d.status = 'active'
-   and not exists (select 1 from public.company_memberships m where m.company_id = d.company_id and m.user_id = d.created_by
-                   and m.status = 'active' and m.all_properties);
 
 -- =============================================================================
 -- R1-03 Import visibility covers every row in the file; uploaders see their runs
@@ -1037,7 +1050,7 @@ begin
   perform app.audit(rq.company_id, 'capex.decision', 'capex_approval_request', rq.id::text,
                     jsonb_build_object('decision', p_decision, 'approver_type', v_type, 'project_id', rq.project_id), rq.property_id);
   v_final := (select status from public.capex_approval_requests where id = rq.id);
-  if v_final in ('approved', 'rejected') then
+  if v_final in ('approved', 'rejected') and app.user_has_permission(rq.requested_by, 'capex.view', rq.company_id, rq.property_id) then
     select title into v_title from public.capex_projects where id = rq.project_id;
     perform app.notify_user(rq.company_id, rq.requested_by, rq.property_id, 'capex_request_decided',
       case when v_final = 'approved' then format('CapEx request approved: %s', v_title)

@@ -41,13 +41,13 @@ export function useSubmitGuard() {
 }
 
 /**
- * Wraps an RPC call as a mutation that refreshes all queries on success. A second call
- * while one is in flight is ignored (its promise never settles), so a double-click
- * sends exactly one RPC.
+ * Wraps an RPC call as a mutation that refreshes all queries on success. A repeat call
+ * with the same arguments while one is in flight is ignored (its promise never settles),
+ * so a double-click sends exactly one RPC; calls for other rows still go through.
  */
 export function useRpc<A extends Record<string, unknown>>(fn: string) {
   const qc = useQueryClient();
-  const inFlight = useRef(false);
+  const inFlight = useRef(new Set<string>());
   const m = useMutation({
     mutationFn: async (args: A) => unwrap(await supabase.rpc(fn, args)),
     onSuccess: () => qc.invalidateQueries(),
@@ -55,10 +55,11 @@ export function useRpc<A extends Record<string, unknown>>(fn: string) {
   const { mutateAsync: rawAsync } = m;
   const mutateAsync = useCallback(
     (args: A): ReturnType<typeof rawAsync> => {
-      if (inFlight.current) return new Promise<never>(() => undefined);
-      inFlight.current = true;
+      const key = JSON.stringify(args);
+      if (inFlight.current.has(key)) return new Promise<never>(() => undefined);
+      inFlight.current.add(key);
       return rawAsync(args).finally(() => {
-        inFlight.current = false;
+        inFlight.current.delete(key);
       });
     },
     [rawAsync],

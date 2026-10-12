@@ -50,6 +50,21 @@ describe('R1-02 / R1-53 CapEx property integrity', () => {
     expect(doc.status).toBe(400);
   });
 
+  it('spend can only settle a commitment on the same project', async () => {
+    const fin = await signIn(USER.hvFinance);
+    const other = '81000000-0000-4000-8000-000000000005'; // another Portland project
+    const c = await fin.db.from('capex_transactions').insert({
+      company_id: COMPANY.harborview, property_id: PROPERTY.pdx, project_id: other, kind: 'commitment', amount: 500,
+      transaction_date: '2026-01-01', created_by: fin.userId,
+    }).select('id').single();
+    expect(c.error).toBeNull();
+    const linked = await fin.db.from('capex_transactions').insert({
+      company_id: COMPANY.harborview, property_id: PROPERTY.pdx, project_id: PDX_PROJECT, kind: 'actual', amount: 100,
+      transaction_date: '2026-01-02', created_by: fin.userId, related_commitment_id: c.data!.id,
+    });
+    expect(linked.error).not.toBeNull();
+  });
+
   it('quotes and commitments must be positive', async () => {
     const fin = await signIn(USER.hvFinance);
     const neg = await fin.db.from('capex_transactions').insert({

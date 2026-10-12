@@ -50,7 +50,7 @@ begin
   on conflict (company_id, key) do nothing;
 end;
 $$;
-revoke execute on function app.seed_company_defaults(uuid) from public;
+revoke execute on function app.seed_company_defaults(uuid) from public, anon, authenticated;
 
 create or replace function public.provision_company(
   p_slug text, p_name text, p_portal_name text, p_admin_email text
@@ -309,16 +309,22 @@ begin
   insert into public.reporting_packages (company_id, property_id, period_month, revision, supersedes_id, correction_reason, title, summary, created_by)
   values (pk.company_id, pk.property_id, pk.period_month, v_rev, pk.id, p_reason, pk.title, pk.summary, auth.uid())
   returning id into v_id;
+  -- Published packages may hold historical duplicate documents; copy each document once.
   insert into public.reporting_package_items (company_id, package_id, item_type, ref_id, title, sort_order)
-  select company_id, v_id, item_type,
-         case when item_type = 'financial_report' then
-           coalesce((select r.id from public.financial_reports r where r.property_id = pk.property_id
-                       and r.period_month = pk.period_month and r.status = 'published'), ref_id)
-         else ref_id end,
-         title, sort_order
-  from public.reporting_package_items
-  where package_id = pk.id
-    and (item_type <> 'document' or app.document_is_released(ref_id));
+  select company_id, v_id, item_type, new_ref, title, sort_order
+  from (
+    select distinct on (case when i.item_type = 'document' then 'd:' || i.ref_id::text else 'i:' || i.id::text end)
+           i.company_id, i.item_type,
+           case when i.item_type = 'financial_report' then
+             coalesce((select r.id from public.financial_reports r where r.property_id = pk.property_id
+                         and r.period_month = pk.period_month and r.status = 'published'), i.ref_id)
+           else i.ref_id end as new_ref,
+           i.title, i.sort_order
+    from public.reporting_package_items i
+    where i.package_id = pk.id
+      and (i.item_type <> 'document' or app.document_is_released(i.ref_id))
+    order by case when i.item_type = 'document' then 'd:' || i.ref_id::text else 'i:' || i.id::text end, i.sort_order
+  ) x;
   insert into public.publication_events (company_id, property_id, entity_type, entity_id, revision, from_status, to_status, comment, actor_user_id)
   values (pk.company_id, pk.property_id, 'reporting_package', v_id, v_rev, null, 'draft', 'Revision created: ' || p_reason, auth.uid());
   return v_id;
@@ -330,8 +336,9 @@ grant execute on function public.create_reporting_package_revision(uuid, text) t
 -- R2-16 The two-year opening guard also runs when a property becomes active
 -- R2-21 Room-count error names the full range
 -- =============================================================================
+-- Security definer so the existing-data check sees every row regardless of the editor's RLS.
 create or replace function app.property_opened_on_guard() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 declare
   v_first date;
   v_opened_changed boolean := tg_op = 'INSERT' or new.opened_on is distinct from old.opened_on;
