@@ -251,7 +251,7 @@ create policy profiles_admin on public.profiles for select to authenticated
     select 1 from public.company_memberships m
     where m.user_id = profiles.id
       and m.company_id = any ((select app.permitted_company_ids('admin.users'))::uuid[]))
-    or app.support_session_covers_user(profiles.id));
+    or ((select app.is_platform_admin()) and app.support_session_covers_user(profiles.id)));
 
 -- =============================================================================
 -- R3-04 Room inventory can be extended backwards before the first period
@@ -539,6 +539,21 @@ grant execute on function public.get_reporting_package(uuid) to authenticated;
 -- R3-07 Approving monthly actuals over a published statement lists the line diff
 -- R3-24 Re-importing identical lines into a draft counts as unchanged
 -- =============================================================================
+-- The line diff of a pending revision holds unpublished figures, so it is kept out of
+-- import_runs.result (readable with ingestion.view). Amounts live here, with no client
+-- access, and are served by public.import_statement_diff to draft-financials readers.
+create table public.import_statement_diffs (
+  import_run_id uuid not null references public.import_runs (id) on delete cascade,
+  company_id uuid not null references public.companies (id) on delete cascade,
+  property_id uuid not null references public.properties (id) on delete cascade,
+  period_month date not null,
+  line_changes jsonb not null,
+  created_at timestamptz not null default now(),
+  primary key (import_run_id, property_id, period_month)
+);
+alter table public.import_statement_diffs enable row level security;
+revoke all on public.import_statement_diffs from public, anon, authenticated;
+
 create or replace function public.svc_apply_monthly_actuals(p_import_run_id uuid, p_records jsonb, p_replace boolean, p_dry_run boolean default false)
 returns jsonb
 language plpgsql security definer set search_path = '' as $$
@@ -609,10 +624,14 @@ begin
                      from jsonb_array_elements(g.lines) x group by 1) n on n.account_id = o.account_id
           join public.financial_accounts a on a.id = coalesce(o.account_id, n.account_id)
           where o.amount is distinct from n.amount;
+          insert into public.import_statement_diffs (import_run_id, company_id, property_id, period_month, line_changes)
+          values (v_run.id, v_run.company_id, g.property_id, g.period_month, v_diff)
+          on conflict (import_run_id, property_id, period_month) do update set line_changes = excluded.line_changes, created_at = now();
           v_conflicts := v_conflicts || jsonb_build_object('propertyId', g.property_id, 'periodMonth', g.period_month,
             'reason', 'A published report exists; approve the import as a revision to replace it',
             'replacesStatement', true, 'revision', v_report.revision,
-            'lineChanges', v_diff,
+            -- Accounts and change types only; amounts come from public.import_statement_diff.
+            'lineChanges', (select coalesce(jsonb_agg(d - 'old' - 'new'), '[]'::jsonb) from jsonb_array_elements(v_diff) d),
             'changed', (select count(*) from jsonb_array_elements(v_diff) d where d ->> 'change' = 'changed'),
             'added', (select count(*) from jsonb_array_elements(v_diff) d where d ->> 'change' = 'added'),
             'removed', (select count(*) from jsonb_array_elements(v_diff) d where d ->> 'change' = 'removed'));
@@ -658,6 +677,23 @@ $$;
 revoke all on function public.svc_apply_monthly_actuals(uuid, jsonb, boolean, boolean) from public, anon, authenticated;
 grant execute on function public.svc_apply_monthly_actuals(uuid, jsonb, boolean, boolean) to service_role;
 
+-- Amounts of a pending statement replacement, per property, for users who may see draft
+-- financials (or edit them) at that property. Other properties in the run are omitted.
+create or replace function public.import_statement_diff(p_run_id uuid)
+returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_agg(jsonb_build_object('propertyId', d.property_id, 'periodMonth', d.period_month, 'lineChanges', d.line_changes)
+                            order by d.property_id, d.period_month), '[]'::jsonb)
+  from public.import_statement_diffs d
+  join public.import_runs r on r.id = d.import_run_id
+  where d.import_run_id = p_run_id
+    and app.can_view_import_run(r.company_id, r.property_ids)
+    and (app.has_permission('financials.view_draft', d.company_id, d.property_id)
+         or app.has_permission('financials.edit', d.company_id, d.property_id));
+$$;
+revoke all on function public.import_statement_diff(uuid) from public, anon;
+grant execute on function public.import_statement_diff(uuid) to authenticated;
+
 -- =============================================================================
 -- R3-08 Author, approver and timestamp columns are set by the database
 -- =============================================================================
@@ -682,7 +718,10 @@ begin
   else
     new.created_by := old.created_by;
     new.created_at := old.created_at;
-    if new.status = 'published' and old.status is distinct from 'published' then
+    if new.status is distinct from 'published' then
+      new.published_by := null;
+      new.published_at := null;
+    elsif old.status is distinct from 'published' then
       new.published_by := auth.uid();
       new.published_at := now();
     else
@@ -788,8 +827,10 @@ begin
   if v_m.user_id = auth.uid() and p_effect = 'deny' and p_permission like 'admin.%' then
     raise exception 'you cannot remove your own administration access; ask another administrator' using errcode = '23514';
   end if;
-  if p_effect = 'deny' and p_permission in ('admin.users', 'admin.company') then
-    -- Serialize admin changes per company, then require another effective holder.
+  if p_effect = 'deny' and p_permission in ('admin.users', 'admin.company')
+     and app.membership_allows_user(v_m.id, v_m.user_id, p_permission, 'any') then
+    -- Serialize admin changes per company (same lock as app.assert_not_last_admin), then
+    -- require another effective holder. Denying someone who does not hold it is always fine.
     perform pg_advisory_xact_lock(hashtext('company_admins:' || v_m.company_id::text));
     if not exists (
       select 1 from public.company_memberships o
@@ -816,6 +857,32 @@ begin
 end;
 $$;
 grant execute on function public.set_permission_override(uuid, text, text) to authenticated;
+
+-- Revoking a membership or demoting a company admin uses the same rule as a deny override:
+-- if the member effectively holds admin.users or admin.company, another active member must
+-- hold it too. Same per-company lock, so concurrent role changes and denials cannot race.
+create or replace function app.assert_not_last_admin(p_membership_id uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_m public.company_memberships;
+  v_perm text;
+begin
+  select * into v_m from public.company_memberships where id = p_membership_id;
+  if not found or v_m.status <> 'active' then
+    return;
+  end if;
+  perform pg_advisory_xact_lock(hashtext('company_admins:' || v_m.company_id::text));
+  foreach v_perm in array array['admin.users', 'admin.company'] loop
+    if app.membership_allows_user(v_m.id, v_m.user_id, v_perm, 'any') and not exists (
+      select 1 from public.company_memberships o
+      where o.company_id = v_m.company_id and o.status = 'active' and o.id <> v_m.id
+        and app.membership_allows_user(o.id, o.user_id, v_perm, 'any')) then
+      raise exception 'cannot remove the last company administrator' using errcode = '23514';
+    end if;
+  end loop;
+end;
+$$;
+revoke execute on function app.assert_not_last_admin(uuid) from public, anon, authenticated;
 
 -- =============================================================================
 -- R3-39 Property-specific notifications name the property

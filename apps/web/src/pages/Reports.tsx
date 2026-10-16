@@ -84,7 +84,7 @@ interface Snapshot {
   performance?: Perf;
   performance_prior_year?: Perf;
   financial_report?: { id: string; title: string; revision: number; published_at: string } | null;
-  budget_variance?: Array<{ account_id: string; code: string; name: string; nature: Account['nature']; section: string; sort_order: number; actual: number | null; budget: number | null }>;
+  budget_variance?: Array<{ account_id: string; code: string; name: string; nature: Account['nature']; section: string; sort_order: number; actual: number | null; budget?: number | null }>;
   commentary?: Array<{ section: string; title: string | null; body: string; account_name?: string | null }>;
   /** Set when the viewer may see the statement but not budgets (budget figures removed). */
   budget_hidden?: boolean;
@@ -130,7 +130,7 @@ export function ReportPackagePage() {
   // Like the dashboard: no prior-year changes for an incomplete period (R3-14).
   const comparisonNote = partial ? 'Comparisons hidden — incomplete period' : undefined;
   const corrected = s?.financial_report && currentStatement.data && currentStatement.data.revision > s.financial_report.revision ? currentStatement.data : null;
-  const statement = s?.budget_variance ? buildStatement(s.budget_variance.map((b) => ({ id: b.account_id, code: b.code, name: b.name, nature: b.nature, section: b.section, sort_order: b.sort_order })), new Map(s.budget_variance.filter((b) => b.actual !== null).map((b) => [b.account_id, Number(b.actual)])), new Map(s.budget_variance.filter((b) => b.budget !== null).map((b) => [b.account_id, Number(b.budget)])), new Map()) : null;
+  const statement = s?.budget_variance ? buildStatement(s.budget_variance.map((b) => ({ id: b.account_id, code: b.code, name: b.name, nature: b.nature, section: b.section, sort_order: b.sort_order })), new Map(s.budget_variance.filter((b) => b.actual !== null).map((b) => [b.account_id, Number(b.actual)])), new Map(s.budget_variance.filter((b) => !s.budget_hidden && b.budget !== null && b.budget !== undefined).map((b) => [b.account_id, Number(b.budget)])), new Map()) : null;
   return (
     <div className="stack">
       <div className="small"><Link to="/reports">← Owner reports</Link></div>

@@ -18,6 +18,8 @@ export function IngestionSourcesCard() {
   const { can } = usePortal();
   const company = useCompany();
   const manage = can('ingestion.manage');
+  // Sources and email routes are company-wide: writable only with access to every property.
+  const companyWide = company.all_properties && company.company_permissions.includes('ingestion.manage');
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const sources = useQuery({
@@ -25,7 +27,7 @@ export function IngestionSourcesCard() {
     queryFn: async () => unwrap(await supabase.from('ingestion_sources').select('id, name, channel, report_type, parser_key, revision_policy, expected_cadence, expected_by_local, expected_by_day, active').eq('company_id', company.company_id).order('name')) as Source[],
   });
   return (
-    <Card flush title="Ingestion sources" actions={manage && <button className="btn btn-primary" style={{ marginRight: 16 }} onClick={() => setCreating(true)}>New source</button>}>
+    <Card flush title="Ingestion sources" actions={companyWide && <button className="btn btn-primary" style={{ marginRight: 16 }} onClick={() => setCreating(true)}>New source</button>}>
       {sources.isLoading ? <Loading /> : (sources.data ?? []).length === 0 ? <Empty title="No ingestion sources" /> : (
         <div className="table-wrap">
           <table className="data">
@@ -48,7 +50,7 @@ export function IngestionSourcesCard() {
         Supported formats: {listParsers().map((p) => p.label).join('; ')}. PMS-specific formats are added only after verification against real sample reports.
       </div>
       {creating && <NewSource onClose={() => setCreating(false)} />}
-      {open && sources.data && <SourceConfig source={sources.data.find((s) => s.id === open)!} onClose={() => setOpen(null)} />}
+      {open && sources.data && <SourceConfig source={sources.data.find((s) => s.id === open)!} companyWide={companyWide} onClose={() => setOpen(null)} />}
     </Card>
   );
 }
@@ -97,7 +99,9 @@ function NewSource({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SourceConfig({ source, onClose }: { source: Source; onClose: () => void }) {
+const NO_SOURCE_ACCESS = 'Nothing was changed: this needs ingestion access to every property, or to the property of this mapping.';
+
+function SourceConfig({ source, companyWide, onClose }: { source: Source; companyWide: boolean; onClose: () => void }) {
   const company = useCompany();
   const { properties } = usePortal();
   const qc = useQueryClient();
@@ -116,12 +120,15 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
   const [map, setMap] = useState({ code: '', property: '' });
   const refresh = () => qc.invalidateQueries({ predicate: (q) => ['route', 'mappings-src', 'ingestion-sources-full', 'ingestion-sources'].includes(String(q.queryKey[0])) });
   /** Runs a write; returns true on success so inputs are only cleared when it worked. */
-  const run = async (p: PromiseLike<{ error: { message: string; code?: string } | null }>, duplicate?: string): Promise<boolean> => {
+  /** Updates and deletes add .select('id'): RLS filters rows out of reach without an error, so no rows back means nothing changed. */
+  const run = async (p: PromiseLike<{ error: { message: string; code?: string } | null; data?: unknown }>, duplicate?: string): Promise<boolean> => {
     setErr(null);
-    const { error } = await p;
+    const { error, data } = await p;
+    const none = !error && Array.isArray(data) && data.length === 0;
     if (error) setErr(error.code === '23505' && duplicate ? duplicate : dbErrorMessage(error));
+    else if (none) setErr(NO_SOURCE_ACCESS);
     await refresh();
-    return !error;
+    return !error && !none;
   };
   const senders = route.data?.allowed_senders ?? [];
   /** Atomic sender change on the server (no read-modify-write of a cached list); shows the server's list. */
@@ -146,13 +153,17 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
       {source.channel === 'email' && mappings.data && mappings.data.length === 0 && (
         <Notice tone="warn">Emails to this source will be rejected until you map property codes below.</Notice>
       )}
-      <div className="row">
-        <label className="row small" style={{ gap: 6 }}><input type="checkbox" data-no-dirty checked={source.active} onChange={(e) => void run(supabase.from('ingestion_sources').update({ active: e.target.checked }).eq('id', source.id))} /> Active</label>
-        <select aria-label="Revision policy" data-no-dirty value={source.revision_policy} onChange={(e) => void run(supabase.from('ingestion_sources').update({ revision_policy: e.target.value }).eq('id', source.id))}>
-          <option value="require_review">Hold revisions for review</option><option value="replace">Replace revisions automatically</option>
-        </select>
-      </div>
-      {source.channel === 'email' && (
+      {companyWide ? (
+        <div className="row">
+          <label className="row small" style={{ gap: 6 }}><input type="checkbox" data-no-dirty checked={source.active} onChange={(e) => void run(supabase.from('ingestion_sources').update({ active: e.target.checked }).eq('id', source.id).select('id'))} /> Active</label>
+          <select aria-label="Revision policy" data-no-dirty value={source.revision_policy} onChange={(e) => void run(supabase.from('ingestion_sources').update({ revision_policy: e.target.value }).eq('id', source.id).select('id'))}>
+            <option value="require_review">Hold revisions for review</option><option value="replace">Replace revisions automatically</option>
+          </select>
+        </div>
+      ) : (
+        <p className="small muted">Source settings and the email route are company-wide and need ingestion access to every property. You can map report codes to your properties below.</p>
+      )}
+      {source.channel === 'email' && companyWide && (
         <>
           <h3>Email route</h3>
           {route.data ? (
@@ -172,7 +183,7 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
                   <button className="btn btn-sm" disabled={!validSender} onClick={() => void changeSender('add_allowed_sender', sender).then((ok) => ok && setSender(''))}>Add sender</button>
                 </div>
               </div>
-              <label className="row small" style={{ gap: 6 }}><input type="checkbox" data-no-dirty checked={route.data.require_spf_dkim_pass} onChange={(e) => void run(supabase.from('ingestion_source_routes').update({ require_spf_dkim_pass: e.target.checked }).eq('source_id', source.id))} /> Require SPF or DKIM pass (recommended)</label>
+              <label className="row small" style={{ gap: 6 }}><input type="checkbox" data-no-dirty checked={route.data.require_spf_dkim_pass} onChange={(e) => void run(supabase.from('ingestion_source_routes').update({ require_spf_dkim_pass: e.target.checked }).eq('source_id', source.id).select('source_id'))} /> Require SPF or DKIM pass (recommended)</label>
             </div>
           ) : <button className="btn btn-sm" onClick={() => void run(supabase.rpc('rotate_ingestion_route_token', { p_source_id: source.id }))}>Create inbound address</button>}
         </>
@@ -182,7 +193,7 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
       <table className="data">
         <tbody>
           {(mappings.data ?? []).map((m) => (
-            <tr key={m.id}><td><code>{m.external_code}</code></td><td>{properties.find((p) => p.id === m.property_id)?.name ?? '—'}</td><td><button className="btn btn-sm btn-danger" aria-label={`Remove mapping ${m.external_code}`} onClick={() => void run(supabase.from('ingestion_property_mappings').delete().eq('id', m.id))}>Remove</button></td></tr>
+            <tr key={m.id}><td><code>{m.external_code}</code></td><td>{properties.find((p) => p.id === m.property_id)?.name ?? '—'}</td><td><button className="btn btn-sm btn-danger" aria-label={`Remove mapping ${m.external_code}`} onClick={() => void run(supabase.from('ingestion_property_mappings').delete().eq('id', m.id).select('id'))}>Remove</button></td></tr>
           ))}
         </tbody>
       </table>

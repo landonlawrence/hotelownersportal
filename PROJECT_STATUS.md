@@ -82,6 +82,10 @@ Behaviour changes to know on staging/production:
 - Allowed email senders change through `add_allowed_sender` / `remove_allowed_sender` (atomic).
 - Notifications for a property name it.
 
+An independent review of the round-3 changes found one blocker (the import review exposed draft P&L amounts to users without `financials.view_draft`); amounts now live in `import_statement_diffs` and are served by `import_statement_diff()` only to draft-financials readers. Nine non-blocking review items were also fixed.
+
+Deferred from round 3 (need decisions): whether confidential (loan/bank) documents need a 2FA-verified session in MFA-enforced companies; whether an investor without `financials.view` may download a P&L that was filed as a document; package narrative authoring UI; CapEx vendor management.
+
 ## Defects found and fixed during verification
 
 - Default privileges granted new tables to `anon` → default privileges revoked globally; test asserts no `anon` grants and RLS on every table.

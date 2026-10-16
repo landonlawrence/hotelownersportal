@@ -36,8 +36,13 @@ const ISSUE_LINK: Record<string, { to: string; label: string }> = {
 
 interface StatementReplacement {
   propertyId: string; periodMonth: string; revision: number; changed: number; added: number; removed: number;
-  lineChanges?: Array<{ accountId: string; code: string; name: string; change: 'changed' | 'added' | 'removed'; old: number | null; new: number | null }>;
+  lineChanges?: Array<{ accountId: string; code: string; name: string; change: 'changed' | 'added' | 'removed' }>;
   replacesStatement?: boolean;
+}
+/** Amounts of a statement replacement; only returned to users who may see draft financials there. */
+interface StatementDiffAmounts {
+  propertyId: string; periodMonth: string;
+  lineChanges: Array<{ accountId: string; old: number | null; new: number | null }>;
 }
 
 const show = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
@@ -172,6 +177,15 @@ export function ImportDetailPage() {
   // Monthly actuals over a published statement replace the whole statement (R3-07).
   const replacements = details.filter((c) => c.replacesStatement) as unknown as Array<StatementReplacement>;
   const removedTotal = replacements.reduce((a, c) => a + Number(c.removed ?? 0), 0);
+  const amounts = useQuery({
+    queryKey: ['import-statement-diff', id],
+    enabled: replacements.length > 0,
+    queryFn: async () => unwrap(await supabase.rpc('import_statement_diff', { p_run_id: id! })) as StatementDiffAmounts[],
+  });
+  const amountsFor = (c: StatementReplacement) => {
+    const d = (amounts.data ?? []).find((x) => x.propertyId === c.propertyId && String(x.periodMonth) === String(c.periodMonth));
+    return d ? new Map(d.lineChanges.map((l) => [l.accountId, l])) : null;
+  };
   const act = async (path: 'approve' | 'reject' | 'retry') => {
     if (pending) return;
     if (path === 'approve' && removedTotal > 0 && !window.confirm(`Approving removes ${removedTotal} account(s) that are not in this file from the published statement(s). The previous revision stays in history. Approve?`)) return;
@@ -235,20 +249,24 @@ export function ImportDetailPage() {
           {r.review_note && <><dt>Review note</dt><dd>{r.review_note}</dd></>}
         </dl>
       </Card>
-      {replacements.map((c, i) => (
-        <Card key={`rep-${i}`} flush title={`Statement changes — ${properties.find((p) => p.id === c.propertyId)?.code ?? '—'} ${fmtMonth(String(c.periodMonth))}`}>
-          <div className="table-wrap"><table className="data"><thead><tr><th>Account</th><th>Change</th><th className="num">Published</th><th className="num">In this file</th></tr></thead><tbody>
-            {(c.lineChanges ?? []).map((l) => (
-              <tr key={l.accountId} className={l.change === 'removed' ? 'row-removed' : undefined}>
-                <td>{l.name}<div className="small muted">{l.code}</div></td>
-                <td><StatusBadge status={l.change === 'removed' ? 'rejected' : l.change === 'added' ? 'pending' : 'in_review'} label={l.change === 'removed' ? 'will be removed' : l.change} /></td>
-                <td className="num">{l.old === null ? '—' : formatCurrency(Number(l.old))}</td>
-                <td className="num">{l.new === null ? '—' : formatCurrency(Number(l.new))}</td>
-              </tr>
-            ))}
-          </tbody></table></div>
-        </Card>
-      ))}
+      {replacements.map((c, i) => {
+        const amt = amountsFor(c);
+        const money = (v: number | null | undefined) => (v === null || v === undefined ? '—' : formatCurrency(Number(v)));
+        return (
+          <Card key={`rep-${i}`} flush title={`Statement changes — ${properties.find((p) => p.id === c.propertyId)?.code ?? '—'} ${fmtMonth(String(c.periodMonth))}`}>
+            <div className="table-wrap"><table className="data"><thead><tr><th>Account</th><th>Change</th>{amt && <><th className="num">Published</th><th className="num">In this file</th></>}</tr></thead><tbody>
+              {(c.lineChanges ?? []).map((l) => (
+                <tr key={l.accountId} className={l.change === 'removed' ? 'row-removed' : undefined}>
+                  <td>{l.name}<div className="small muted">{l.code}</div></td>
+                  <td><StatusBadge status={l.change === 'removed' ? 'rejected' : l.change === 'added' ? 'pending' : 'in_review'} label={l.change === 'removed' ? 'will be removed' : l.change} /></td>
+                  {amt && <><td className="num">{money(amt.get(l.accountId)?.old)}</td><td className="num">{money(amt.get(l.accountId)?.new)}</td></>}
+                </tr>
+              ))}
+            </tbody></table></div>
+            {!amt && amounts.isSuccess && <div className="small muted" style={{ padding: '8px 12px' }}>Amounts are shown to users who can view draft financials for this property.</div>}
+          </Card>
+        );
+      })}
       {conflicts.filter((c) => !c.replacesStatement).length > 0 && (
         <Card title={`Changed values${conflicts.length > 100 ? ' (first 100)' : ''}`} flush>
           <div className="table-wrap"><table className="data"><thead><tr><th>Property</th><th>Date / period</th><th>Change</th></tr></thead><tbody>

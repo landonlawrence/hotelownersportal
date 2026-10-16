@@ -17,14 +17,14 @@ const UID = {
 const HV_FINANCE_MEMBERSHIP = '50000000-0000-4000-8000-000000000012';
 const FLASH_SOURCE = '90000000-0000-4000-8000-000000000001';
 
-/** Run `fn` as a signed-in user (aal2) in a transaction that is always rolled back. `setup` runs first as the superuser. */
-async function asUser<T>(userId: string, fn: (c: PoolClient) => Promise<T>, setup?: (c: PoolClient) => Promise<void>): Promise<T> {
+/** Run `fn` as a signed-in user (aal2 unless given) in a transaction that is always rolled back. `setup` runs first as the superuser. */
+async function asUser<T>(userId: string, fn: (c: PoolClient) => Promise<T>, setup?: (c: PoolClient) => Promise<void>, aal: 'aal1' | 'aal2' = 'aal2'): Promise<T> {
   const c = await sql().connect();
   try {
     await c.query('begin');
     if (setup) await setup(c);
     await c.query('set local role authenticated');
-    await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: userId, role: 'authenticated', aal: 'aal2' })]);
+    await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: userId, role: 'authenticated', aal })]);
     return await fn(c);
   } finally {
     await c.query('rollback');
@@ -144,6 +144,19 @@ describe('R3-02 platform administrators see no tenant money or profiles without 
     );
   });
 
+  it('a support session does not open tenant profiles without two-factor (aal1)', async () => {
+    await asUser(
+      UID.platform,
+      async (c) => {
+        expect((await c.query("select id from public.profiles where email = 'gm.seattle@harborview.example'")).rows).toEqual([]);
+      },
+      async (c) => {
+        await c.query("insert into public.support_access_sessions (company_id, user_id, reason, ticket_ref, starts_at, expires_at) values ($1, $2, 'QA round 3 profile visibility check', 'T-3', now() - interval '1 minute', now() + interval '1 hour')", [COMPANY.harborview, UID.platform]);
+      },
+      'aal1',
+    );
+  });
+
   it('a support session shows the company’s member profiles', async () => {
     await asUser(
       UID.platform,
@@ -245,11 +258,46 @@ describe('R3-07 / R3-21 / R3-24 monthly actuals imports', () => {
     const detail = r.result.preview!.conflictDetails![0]!;
     const accounts = new Set(lines!.map((l) => l.account_id)).size;
     expect(detail).toMatchObject({ replacesStatement: true, changed: 1, added: 0, removed: accounts - 2 });
-    const changes = detail.lineChanges as Array<{ code: string; change: string; old: number; new: number | null }>;
-    expect(changes.find((x) => x.code === 'REV_ROOMS')).toMatchObject({ change: 'changed', old: Number(rooms.amount), new: Number(rooms.amount) + 100 });
+    const changes = detail.lineChanges as Array<{ accountId: string; code: string; change: string }>;
+    expect(changes.find((x) => x.code === 'REV_ROOMS')).toMatchObject({ change: 'changed' });
     expect(changes.filter((x) => x.change === 'removed')).toHaveLength(accounts - 2);
     expect(changes.find((x) => x.code === 'REV_FB')).toBeUndefined();
+    // Draft amounts are not stored on the run; finance reads them through the RPC.
+    expect(changes.every((x) => !('old' in x) && !('new' in x))).toBe(true);
+    await asUser(UID.hvFinance, async (c) => {
+      const diff = (await c.query('select public.import_statement_diff($1) as d', [r.id])).rows[0]!.d as Array<{ propertyId: string; lineChanges: Array<{ accountId: string; old: number | null; new: number | null }> }>;
+      expect(diff).toHaveLength(1);
+      expect(diff[0]!.propertyId).toBe(PROPERTY.hnl);
+      expect(diff[0]!.lineChanges.find((x) => x.accountId === rooms.account_id)).toMatchObject({ old: Number(rooms.amount), new: Number(rooms.amount) + 100 });
+    });
     await call(`/imports/${r.id}/reject`, { method: 'POST', token, headers: { 'content-type': 'application/json' }, body: '{}' });
+  });
+
+  it('a property manager with ingestion.view sees which accounts change, but not the draft amounts', async () => {
+    const { token } = await signIn(USER.hvFinance);
+    const { data: rep } = await serviceDb().from('financial_reports').select('id').eq('property_id', PROPERTY.sea).eq('period_month', '2026-08-01').eq('status', 'published').single();
+    const { data: lines } = await serviceDb().from('financial_report_lines').select('amount, financial_accounts(code)').eq('financial_report_id', rep!.id);
+    const rooms = lines!.find((l) => (l.financial_accounts as unknown as { code: string }).code === 'REV_ROOMS')!;
+    const draft = (Number(rooms.amount) + 4321.17).toFixed(2);
+    const r = await upload(token, 'sea-partial.csv', `property_code,period,account_code,account_name,amount\nHV-SEA,2026-08,REV_ROOMS,${NONCE},${draft}`);
+    try {
+      expect(r.status).toBe('needs_review');
+      await asUser(UID.hvGm, async (c) => {
+        const seen = (await c.query('select result from public.import_runs where id = $1', [r.id])).rows;
+        expect(seen).toHaveLength(1);
+        const text = JSON.stringify(seen[0]!.result);
+        expect(text).toContain('REV_ROOMS');
+        expect(text).not.toContain(draft);
+        expect((await c.query('select public.import_statement_diff($1) as d', [r.id])).rows[0]!.d).toEqual([]);
+        expect((await attempt(c, 'select * from public.import_statement_diffs')).code).toBe('42501');
+      });
+      await asUser(UID.hvFinance, async (c) => {
+        const diff = (await c.query('select public.import_statement_diff($1) as d', [r.id])).rows[0]!.d;
+        expect(JSON.stringify(diff)).toContain(draft);
+      });
+    } finally {
+      await call(`/imports/${r.id}/reject`, { method: 'POST', token, headers: { 'content-type': 'application/json' }, body: '{}' });
+    }
   });
 
   it('re-importing identical lines into a draft counts as unchanged', async () => {
@@ -274,12 +322,25 @@ describe('R3-08 authorship and timestamps are set by the database', () => {
     await asUser(UID.hvGm, async (c) => {
       const m = (await c.query("insert into public.management_commentary (company_id, property_id, period_month, section, body, visibility, status, created_by, created_at, published_by, published_at) values ($1, $2, '2026-08-01', 'other', 'QA3', 'owner', 'published', $3, '2020-01-01', $3, '2020-01-01') returning created_by, published_by, created_at > now() - interval '1 minute' as fresh, published_at > now() - interval '1 minute' as pub_fresh", [COMPANY.harborview, PROPERTY.sea, UID.hvFinance])).rows[0]!;
       expect(m).toEqual({ created_by: UID.hvGm, published_by: UID.hvGm, fresh: true, pub_fresh: true });
-      const u = (await c.query("insert into public.capex_updates (company_id, property_id, project_id, body, visibility, created_by, created_at) values ($1, $2, '81000000-0000-4000-8000-000000000001', 'QA3', 'owner', $3, '2099-01-01') returning id, created_at < now() + interval '1 second' as now_ok", [COMPANY.harborview, PROPERTY.sea, UID.hvGm])).rows[0]!;
-      expect(u.now_ok).toBe(true);
+      // Moving it back to draft clears the publication stamp.
+      const back = (await c.query("update public.management_commentary set status = 'draft', published_by = $2 where body = 'QA3' and property_id = $1 returning published_by, published_at", [PROPERTY.sea, UID.hvFinance])).rows[0]!;
+      expect(back).toEqual({ published_by: null, published_at: null });
+      // A forged author is replaced by the caller.
+      const u = (await c.query("insert into public.capex_updates (company_id, property_id, project_id, body, visibility, created_by, created_at) values ($1, $2, '81000000-0000-4000-8000-000000000001', 'QA3', 'owner', $3, '2099-01-01') returning id, created_by, created_at < now() + interval '1 second' as now_ok", [COMPANY.harborview, PROPERTY.sea, UID.hvFinance])).rows[0]!;
+      expect(u).toMatchObject({ created_by: UID.hvGm, now_ok: true });
+      const t = (await c.query("insert into public.capex_transactions (company_id, property_id, project_id, kind, status, amount, transaction_date, created_by, created_at) values ($1, $2, '81000000-0000-4000-8000-000000000001', 'quote', 'open', 10, current_date, $3, '2099-01-01') returning id, created_by, created_at < now() + interval '1 second' as now_ok", [COMPANY.harborview, PROPERTY.sea, UID.hvFinance])).rows[0]!;
+      expect(t).toMatchObject({ created_by: UID.hvGm, now_ok: true });
+      // Clients cannot write the author column on update (column grants); permitted updates keep it.
+      expect((await attempt(c, 'update public.capex_transactions set created_by = $2 where id = $1', [t.id, UID.hvFinance])).code).toBe('42501');
+      expect((await attempt(c, 'update public.capex_updates set created_by = $2 where id = $1', [u.id, UID.hvFinance])).code).toBe('42501');
+      expect((await c.query("update public.capex_transactions set description = 'QA3 edited' where id = $1 returning created_by", [t.id])).rows[0]!.created_by).toBe(UID.hvGm);
     });
     await asUser(UID.hvFinance, async (c) => {
-      const b = (await c.query("insert into public.budget_versions (company_id, property_id, fiscal_year, version_number, name, created_by, approved_by, approved_at) values ($1, $2, 2031, 1, 'QA3', $3, $3, '2020-01-01') returning created_by, approved_by, approved_at", [COMPANY.harborview, PROPERTY.sea, UID.hvAdmin])).rows[0]!;
-      expect(b).toEqual({ created_by: UID.hvFinance, approved_by: null, approved_at: null });
+      const b = (await c.query("insert into public.budget_versions (company_id, property_id, fiscal_year, version_number, name, created_by, approved_by, approved_at) values ($1, $2, 2031, 1, 'QA3', $3, $3, '2020-01-01') returning id, created_by, approved_by, approved_at", [COMPANY.harborview, PROPERTY.sea, UID.hvAdmin])).rows[0]!;
+      expect(b).toMatchObject({ created_by: UID.hvFinance, approved_by: null, approved_at: null });
+      expect((await attempt(c, "update public.budget_versions set created_by = $2, approved_by = $2, approved_at = '2020-01-01' where id = $1", [b.id, UID.hvAdmin])).code).toBe('42501');
+      const upd = (await c.query("update public.budget_versions set name = 'QA3 renamed' where id = $1 returning name, created_by, approved_by, approved_at", [b.id])).rows[0]!;
+      expect(upd).toEqual({ name: 'QA3 renamed', created_by: UID.hvFinance, approved_by: null, approved_at: null });
     });
   });
 });
@@ -302,6 +363,37 @@ describe('R3-09 the last company administrator keeps admin access', () => {
       },
       async (c) => {
         await c.query("insert into public.membership_permission_overrides (membership_id, company_id, permission_key, effect) values ($1, $2, 'admin.users', 'allow')", [HV_FINANCE_MEMBERSHIP, COMPANY.harborview]);
+      },
+    );
+  });
+});
+
+describe('R3-09 role changes and denials use the same last-administrator rule', () => {
+  it('a demotion is refused when the other company admin was denied user management', async () => {
+    await asUser(
+      UID.hvAdmin,
+      async (c) => {
+        const r = await attempt(c, "select public.update_membership($1, 'corporate_finance', true)", [MEMBERSHIP.hvAdmin]);
+        expect(r.code).toBe('23514');
+        expect(r.message).toMatch(/last company administrator/);
+      },
+      async (c) => {
+        await c.query("update public.company_memberships set role = 'company_admin' where id = $1", [HV_FINANCE_MEMBERSHIP]);
+        await c.query("insert into public.membership_permission_overrides (membership_id, company_id, permission_key, effect) values ($1, $2, 'admin.users', 'deny')", [HV_FINANCE_MEMBERSHIP, COMPANY.harborview]);
+      },
+    );
+  });
+
+  it('denying admin access to someone who does not hold it is not a last-holder error', async () => {
+    await asUser(
+      UID.hvFinance,
+      async (c) => {
+        expect((await attempt(c, "select public.set_permission_override($1, 'admin.company', 'deny')", [MEMBERSHIP.hvGm])).code).toBeNull();
+      },
+      async (c) => {
+        // Nobody holds admin.company; finance manages users through an override.
+        await c.query("insert into public.membership_permission_overrides (membership_id, company_id, permission_key, effect) values ($1, $2, 'admin.users', 'allow')", [HV_FINANCE_MEMBERSHIP, COMPANY.harborview]);
+        await c.query("insert into public.membership_permission_overrides (membership_id, company_id, permission_key, effect) values ($1, $2, 'admin.company', 'deny')", [MEMBERSHIP.hvAdmin, COMPANY.harborview]);
       },
     );
   });

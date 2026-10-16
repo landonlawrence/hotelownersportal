@@ -91,7 +91,19 @@ exportsRoute.get('/performance.csv', async (c) => {
   const { data: props, error: propErr } = await db.from('properties').select('id, code, name, opened_on, status, timezone').eq('company_id', company_id).order('code');
   if (propErr) throw fromPostgrest(propErr);
   let properties = (props ?? []) as Array<{ id: string; code: string; name: string; opened_on: string | null; status: string; timezone: string }>;
-  if (requested) properties = properties.filter((p) => requested.includes(p.id));
+  if (requested) {
+    properties = properties.filter((p) => requested.includes(p.id));
+  } else {
+    // Visible is not enough: list only properties whose performance this user may view.
+    const allowed = await Promise.all(
+      properties.map(async (p) => {
+        const { data: ok, error: e } = await db.rpc('check_permission', { p_perm: 'performance.view', p_company_id: company_id, p_property_id: p.id });
+        if (e) throw fromPostgrest(e);
+        return ok === true;
+      }),
+    );
+    properties = properties.filter((_, i) => allowed[i]);
+  }
   const { data: rows, error } = await db.rpc('performance_rollup', {
     p_company_id: company_id,
     p_from: from,
