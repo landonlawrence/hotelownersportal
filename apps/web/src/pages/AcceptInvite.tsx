@@ -56,7 +56,12 @@ export function AcceptInvitePage() {
       </section>
       <section className="auth-panel">
         <div className="auth-form">
-          {!token && <Notice tone="bad">This invitation link is incomplete.</Notice>}
+          {!token && (
+            <>
+              <Notice tone="bad">This invitation link is incomplete. Open the full link from your invitation email, or ask your administrator to resend it.</Notice>
+              <Link className="btn" to="/login">Go to sign in</Link>
+            </>
+          )}
           {error === 'invalid' && (
             <>
               <Notice tone="bad">This invitation has already been used or has expired. Ask your administrator for a new one.</Notice>
@@ -71,6 +76,13 @@ export function AcceptInvitePage() {
             </>
           )}
           {error && error !== 'invalid' && error !== 'wrong_email' && <Notice tone="bad">{error}</Notice>}
+          {/* Accepting failed after sign-in: say what to do next instead of leaving a dead end. */}
+          {error && error !== 'invalid' && error !== 'wrong_email' && session && (
+            <>
+              <p className="small muted">Open the full link from your invitation email, or ask your administrator to resend it.</p>
+              <Link className="btn" to="/login">Go to sign in</Link>
+            </>
+          )}
           {done && <Notice tone="good">Invitation accepted. Redirecting…</Notice>}
           {!session && token && (
             <form className="stack" onSubmit={submit}>

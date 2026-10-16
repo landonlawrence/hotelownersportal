@@ -83,3 +83,30 @@ export function buildStatement(accounts: Account[], actual: Map<string, number>,
   for (const [s, rs] of bySection) if (!SECTION_ORDER.includes(s)) rows.push(...rs);
   return { rows, statistics };
 }
+
+/**
+ * Statement rows for CSV export (R3-26): the same lines and subtotals as the screen and PDF,
+ * with plain machine-readable numbers (no thousands separators; percentages as e.g. -12.50).
+ * Budget columns only when `withBudget`.
+ */
+export function statementCsvRows(rows: StatementRow[], statistics: StatementRow[], withBudget: boolean): Array<Array<string | number | null>> {
+  const num = (v: number | null, digits: number) => (v === null || !Number.isFinite(v) ? '' : v.toFixed(digits));
+  const header = ['section', 'row_type', 'account_code', 'account_name', 'actual', ...(withBudget ? ['budget', 'variance', 'variance_pct'] : [])];
+  const out: Array<Array<string | number | null>> = [header];
+  const emit = (section: string, r: StatementRow, digits: number) =>
+    out.push([
+      section,
+      r.kind === 'subtotal' ? 'subtotal' : 'account',
+      r.code ?? '',
+      r.label,
+      num(r.actual, digits),
+      ...(withBudget ? [num(r.budget, digits), num(r.vsBudget.amount, digits), num(r.vsBudget.pct === null ? null : r.vsBudget.pct * 100, 2)] : []),
+    ]);
+  for (const s of statistics) emit('Statistics', s, 0);
+  let section = '';
+  for (const r of rows) {
+    if (r.kind === 'section') section = r.label;
+    else emit(r.kind === 'subtotal' ? '' : section, r, 2);
+  }
+  return out;
+}

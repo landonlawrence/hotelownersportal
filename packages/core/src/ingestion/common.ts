@@ -110,3 +110,19 @@ export function tablePropertyScope(
   }
   return { propertyIds: [...ids], unresolved };
 }
+
+/**
+ * Resolve a monthly-actuals account code (R3-21): a property mapping, then a company mapping,
+ * then an exact match on an active reporting-account code. Mappings always take precedence.
+ */
+export function resolveAccountMapping(
+  mappings: ReadonlyArray<{ property_id: string | null; source_account_code: string; account_id: string }>,
+  accounts: ReadonlyArray<{ id: string; code: string; active?: boolean | null }>,
+): (code: string, propertyId: string) => string | null {
+  const active = new Map(accounts.filter((a) => a.active !== false).map((a) => [a.code, a.id]));
+  return (code, propertyId) =>
+    mappings.find((m) => m.property_id === propertyId && m.source_account_code === code)?.account_id ??
+    mappings.find((m) => m.property_id === null && m.source_account_code === code)?.account_id ??
+    active.get(code) ??
+    null;
+}

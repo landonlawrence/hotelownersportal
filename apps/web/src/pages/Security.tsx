@@ -8,7 +8,7 @@ import { Badge, Card, Notice, PageHeader, confirmAction, errorMessage, fmtDate }
 import { MIN_PASSWORD_LENGTH, safeRedirect } from './Login';
 
 /** Two-factor (TOTP) enrolment and step-up to aal2 for privileged actions. */
-export function SecurityPage() {
+export function SecurityPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { ctx, company } = usePortal();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -94,7 +94,8 @@ export function SecurityPage() {
 
   return (
     <div className="stack" style={{ maxWidth: 760 }}>
-      <PageHeader title="Account security" subtitle={ctx?.email} />
+      {/* Inside the platform console the console's h1 stays the only h1. */}
+      <PageHeader title="Account security" subtitle={ctx?.email} as={embedded ? 'h2' : 'h1'} />
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
       {next && !sessionVerified && <Notice tone="info">That section needs a session verified with two-factor authentication. Finish the step below and you’ll be taken there.</Notice>}
       <Card

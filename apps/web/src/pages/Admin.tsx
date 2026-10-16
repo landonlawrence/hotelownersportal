@@ -7,7 +7,7 @@ import { apiJson, fetchMeta } from '../lib/api';
 import { useDisplayNames, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
 import { AdminProperties } from './AdminProperties';
-import { Badge, Card, Empty, Loading, Modal, Notice, PageHeader, StatusBadge, TabPanel, Tabs, confirmAction, dbErrorMessage, errorMessage, fmtDate, localToday } from '../components/ui';
+import { Badge, Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, TabPanel, Tabs, confirmAction, dbErrorMessage, errorMessage, fmtDate, localToday } from '../components/ui';
 
 type Tab = 'users' | 'invitations' | 'properties' | 'branding' | 'audit' | 'support' | 'platform';
 
@@ -79,6 +79,7 @@ function Users() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const editing = q.data?.find((m) => m.id === editingId) ?? null;
   if (q.isLoading) return <Loading />;
+  if (q.error) return <Card title="Members"><ErrorState error={q.error} retry={() => void q.refetch()} /></Card>;
   return (
     <Card flush title="Members">
       <div className="table-wrap">
@@ -89,13 +90,13 @@ function Users() {
               const p = profiles.data?.get(m.user_id);
               const active = m.property_access_grants.filter((g) => !g.revoked_at);
               return (
-                <tr key={m.id} style={{ opacity: m.status === 'revoked' ? 0.6 : 1 }}>
+                <tr key={m.id} className={m.status === 'revoked' ? 'row-muted' : undefined}>
                   <td><strong>{p?.full_name ?? p?.email ?? '—'}</strong><div className="small muted">{p?.email}{m.title && ` · ${m.title}`}</div></td>
                   <td>{ROLE_LABELS[m.role]}</td>
                   <td className="small">{m.all_properties ? 'All properties' : active.length === 0 ? 'None' : active.map((g) => `${properties.find((x) => x.id === g.property_id)?.code ?? '?'}${g.permissions ? ' (limited)' : ''}`).join(', ')}</td>
                   <td className="small">{m.membership_permission_overrides.map((o) => `${o.effect === 'deny' ? '−' : '+'}${o.permission_key}`).join(', ') || '—'}</td>
                   <td><StatusBadge status={m.status} />{m.revoke_reason && <div className="small muted">{m.revoke_reason}</div>}</td>
-                  <td>{m.status === 'active' && m.user_id !== ctx?.user_id && <button className="btn btn-sm" onClick={() => setEditingId(m.id)}>Manage</button>}</td>
+                  <td>{m.status === 'active' && m.user_id !== ctx?.user_id && <button className="btn btn-sm" aria-label={`Manage ${p?.email ?? p?.full_name ?? 'member'}`} onClick={() => setEditingId(m.id)}>Manage</button>}</td>
                 </tr>
               );
             })}
@@ -145,8 +146,10 @@ function ManageMember({ member, email, onClose }: { member: Member; email: strin
   };
   const today = localToday();
   const overrideOptions = PERMISSION_KEYS.filter((k) => !(ownerLike && override.effect === 'allow' && isInternalOnlyPermission(k)));
+  // Every action here saves instantly; only choices made but not yet applied are worth asking about.
+  const pending = role !== member.role || all !== member.all_properties || !!grantProp || !!override.perm || !!reason.trim();
   return (
-    <Modal title={`Manage ${email}`} onClose={onClose}>
+    <Modal title={`Manage ${email}`} onClose={onClose} confirmDiscard={pending}>
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
       <h3>Role</h3>
       <div className="row">
@@ -230,6 +233,8 @@ function Invitations() {
   };
   const status = (i: { accepted_at: string | null; revoked_at: string | null; expires_at: string }) => (i.accepted_at ? 'accepted' : i.revoked_at ? 'revoked' : new Date(i.expires_at) < new Date() ? 'expired' : 'pending');
   const ownerLike = ['owner', 'investor'].includes(f.role);
+  const emailBad = !!f.email.trim() && !emailOk;
+  const noProperty = !f.all && f.props.length === 0;
   return (
     <div className="stack">
       <Card title="Invite a user">
@@ -245,7 +250,11 @@ function Invitations() {
           </Notice>
         )}
         <div className="filter-bar" style={{ border: 0, padding: 0 }}>
-          <label className="field">Email<input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+          <label className="field">
+            Email
+            <input type="email" value={f.email} aria-invalid={emailBad || undefined} aria-describedby={emailBad ? 'invite-email-error' : undefined} onChange={(e) => setF({ ...f, email: e.target.value })} />
+            {emailBad && <span className="field-error" id="invite-email-error">Enter a valid email address.</span>}
+          </label>
           <label className="field">Role<select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as Role, all: false })}>{ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}</select></label>
           {!ownerLike && <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={f.all} onChange={(e) => setF({ ...f, all: e.target.checked })} /> All properties</label>}
         </div>
@@ -255,10 +264,12 @@ function Invitations() {
             <div className="row">{properties.map((p) => <label key={p.id} className="row small" style={{ gap: 4 }}><input type="checkbox" checked={f.props.includes(p.id)} onChange={(e) => setF({ ...f, props: e.target.checked ? [...f.props, p.id] : f.props.filter((x) => x !== p.id) })} />{p.name}</label>)}</div>
           </fieldset>
         )}
-        {f.email.trim() && !emailOk && <span className="field-error">Enter a valid email address.</span>}
-        <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={sending || !emailOk || (!f.all && f.props.length === 0)} onClick={() => void send()}>{sending ? 'Sending…' : 'Send invitation'}</button>
+        {noProperty && <p className="small muted" id="invite-property-hint" style={{ margin: '8px 0 0' }}>Choose at least one property{ownerLike ? '' : ', or All properties'}.</p>}
+        <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={sending || !emailOk || noProperty} aria-describedby={noProperty ? 'invite-property-hint' : undefined} onClick={() => void send()}>{sending ? 'Sending…' : 'Send invitation'}</button>
       </Card>
       <Card flush title="Invitations">
+        {q.error ? <ErrorState error={q.error} retry={() => void q.refetch()} /> : q.isLoading ? <Loading /> : (q.data ?? []).length === 0 ? <Empty title="No invitations yet" /> : (
+        <div className="table-wrap">
         <table className="data">
           <thead><tr><th>Email</th><th>Role</th><th>Access</th><th>Sent</th><th>Status</th><th /></tr></thead>
           <tbody>
@@ -267,11 +278,13 @@ function Invitations() {
                 <td>{i.email}</td><td>{ROLE_LABELS[i.role]}</td>
                 <td className="small">{i.all_properties ? 'All properties' : i.property_ids.map((id) => properties.find((p) => p.id === id)?.code).join(', ')}</td>
                 <td>{fmtDate(i.created_at)}</td><td><StatusBadge status={status(i) === 'pending' ? 'pending' : status(i) === 'accepted' ? 'completed' : 'cancelled'} label={status(i)} /></td>
-                <td>{status(i) === 'pending' && <button className="btn btn-sm btn-danger" onClick={() => confirmAction(`Revoke the invitation for ${i.email}?`) && revoke.mutate({ p_invitation_id: i.id })}>Revoke</button>}</td>
+                <td>{status(i) === 'pending' && <button className="btn btn-sm btn-danger" aria-label={`Revoke invitation for ${i.email}`} onClick={() => confirmAction(`Revoke the invitation for ${i.email}?`) && revoke.mutate({ p_invitation_id: i.id })}>Revoke</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
+        )}
       </Card>
     </div>
   );
@@ -400,7 +413,9 @@ function describeAudit(a: AuditRow): string {
   if (m.expires_at) parts.push(`expires ${fmtDate(String(m.expires_at))}`);
   if (m.revoked_at) parts.push('revoked');
   if (m.token_changed) parts.push('secret changed (value not recorded)');
-  if (m.changes && typeof m.changes === 'object') parts.push(`changed ${Object.keys(m.changes as object).join(', ')}`);
+  // changed_fields names every changed column (money values are never recorded); older events only have changes.
+  if (Array.isArray(m.changed_fields)) parts.push(`changed ${(m.changed_fields as string[]).join(', ')}`);
+  else if (m.changes && typeof m.changes === 'object') parts.push(`changed ${Object.keys(m.changes as object).join(', ')}`);
   return [who && `for ${who}`, ...parts].filter(Boolean).join(' · ');
 }
 
@@ -441,7 +456,7 @@ function Audit() {
         </div>
       }
     >
-      {q.isLoading ? <Loading /> : rows.length === 0 ? <Empty title="No audit events match">Try a different search or date range.</Empty> : (
+      {q.isLoading ? <Loading /> : q.error ? <ErrorState error={q.error} retry={() => void q.refetch()} /> : rows.length === 0 ? <Empty title="No audit events match">Try a different search or date range.</Empty> : (
         <div className="table-wrap" style={{ maxHeight: 600 }}>
           <table className="data">
             <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead>

@@ -11,6 +11,7 @@
  *   8. write idempotently with history, record counts and lineage
  */
 import {
+  resolveAccountMapping,
   getParser,
   hasErrors,
   tablePropertyScope,
@@ -79,6 +80,7 @@ export async function buildContext(svc: SupabaseClient, run: ImportRun): Promise
       openedOn: p.opened_on,
       timeZone: p.timezone,
       roomsOn: (d) => inv.find((i) => i.effective_from <= d && (i.effective_to === null || i.effective_to > d))?.room_count ?? null,
+      inventoryStart: inv.reduce<string | null>((min, i) => (min === null || i.effective_from < min ? i.effective_from : min), null),
     });
   }
 
@@ -102,8 +104,8 @@ export async function buildContext(svc: SupabaseClient, run: ImportRun): Promise
     for (const ref of refs.values()) propertyByCode.set(ref.code, ref);
   }
 
-  const accounts = await must<Array<{ id: string; code: string }>>(
-    svc.from('financial_accounts').select('id, code').eq('company_id', run.company_id),
+  const accounts = await must<Array<{ id: string; code: string; active: boolean }>>(
+    svc.from('financial_accounts').select('id, code, active').eq('company_id', run.company_id),
     'load accounts',
   );
   const mappings = await must<Array<{ property_id: string | null; source_account_code: string; account_id: string }>>(
@@ -115,10 +117,8 @@ export async function buildContext(svc: SupabaseClient, run: ImportRun): Promise
     routed,
     todayFor: (p) => localToday(p.timeZone),
     reportingAccounts: new Map(accounts.map((a) => [a.code, a])),
-    accountMapping: (code, propertyId) =>
-      mappings.find((m) => m.property_id === propertyId && m.source_account_code === code)?.account_id ??
-      mappings.find((m) => m.property_id === null && m.source_account_code === code)?.account_id ??
-      null,
+    // Mappings first, then the company's own (active) reporting account codes.
+    accountMapping: resolveAccountMapping(mappings, accounts),
   };
 }
 

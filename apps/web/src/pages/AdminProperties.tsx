@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from '../lib/supabase';
 import { usePortal, useCompany, type Property } from '../state/portal';
@@ -45,8 +45,8 @@ export function AdminProperties() {
                   <td>{c && <select aria-label={`${p.code} comp treatment`} value={c.comp_treatment} onChange={(e) => setConfig(p.id, { comp_treatment: e.target.value })}><option value="exclude">Excluded from sold</option><option value="include">Included in sold</option></select>}</td>
                   <td>{c && <input aria-label={`${p.code} report deadline`} type="time" value={c.daily_report_deadline_local.slice(0, 5)} onChange={(e) => setConfig(p.id, { daily_report_deadline_local: e.target.value })} />}</td>
                   <td className="row" style={{ gap: 6 }}>
-                    <button className="btn btn-sm" onClick={() => setEditing(p)}>Edit</button>
-                    <button className="btn btn-sm" onClick={() => setInventoryFor(p)}>Room inventory</button>
+                    <button className="btn btn-sm" aria-label={`Edit ${p.name}`} onClick={() => setEditing(p)}>Edit</button>
+                    <button className="btn btn-sm" aria-label={`Room inventory for ${p.name}`} onClick={() => setInventoryFor(p)}>Room inventory</button>
                   </td>
                 </tr>
               );
@@ -68,7 +68,27 @@ function PropertyForm({ property, inventory, onClose }: { property: Property | n
     timezone: property?.timezone ?? 'America/New_York', status: property?.status ?? 'onboarding', opened_on: property?.opened_on ?? '', rooms: '',
   });
   const [err, setErr] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The row as stored now: the baseline for the diff and the updated_at precondition (R3-10).
+  const stored = useQuery({
+    queryKey: ['property-row', property?.id],
+    enabled: !!property,
+    gcTime: 0,
+    queryFn: async () =>
+      unwrap(await supabase.from('properties').select('name, brand, city, region, timezone, status, opened_on, updated_at').eq('id', property!.id).single()) as {
+        name: string; brand: string | null; city: string | null; region: string | null; timezone: string; status: string; opened_on: string | null; updated_at: string;
+      },
+  });
+  const [baseline, setBaseline] = useState<typeof stored.data>(undefined);
+  useEffect(() => {
+    if (stored.data && stored.data.updated_at !== baseline?.updated_at) {
+      const b = stored.data;
+      setBaseline(b);
+      setF((prev) => ({ ...prev, name: b.name, brand: b.brand ?? '', city: b.city ?? '', region: b.region ?? '', timezone: b.timezone, status: b.status, opened_on: b.opened_on ?? '' }));
+    }
+  }, [stored.data, baseline?.updated_at]);
+  const [extendInventory, setExtendInventory] = useState(true);
   const firstData = useQuery({
     queryKey: ['first-business-date', property?.id],
     enabled: !!property,
@@ -77,7 +97,11 @@ function PropertyForm({ property, inventory, onClose }: { property: Property | n
   const roomsValid = f.rooms.trim() === '' || /^[1-9]\d{0,4}$/.test(f.rooms.trim());
   const codeValid = /^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$/.test(f.code.trim());
   const nameValid = f.name.trim().length >= 2 && f.name.trim().length <= 200;
-  const earliestInventory = inventory.map((i) => i.effective_from).sort()[0];
+  const earliestRow = [...inventory].sort((a, b) => a.effective_from.localeCompare(b.effective_from))[0];
+  const earliestInventory = earliestRow?.effective_from;
+  // Moving the opening date before the first inventory period: offer to start inventory then (R3-04).
+  // An untouched opening inventory moves with the opening date automatically.
+  const offerExtend = !!property && !!f.opened_on && !!earliestRow && f.opened_on < earliestRow.effective_from && earliestRow.reason !== 'Opening inventory';
   const earliestData = firstData.data?.[0]?.business_date;
   const today = localToday();
   const twoYears = `${Number(today.slice(0, 4)) + 2}${today.slice(4)}`;
@@ -91,9 +115,34 @@ function PropertyForm({ property, inventory, onClose }: { property: Property | n
     setBusy(true);
     const row = { name: f.name.trim(), brand: f.brand.trim() || null, city: f.city.trim() || null, region: f.region.trim() || null, timezone: f.timezone, status: f.status, opened_on: f.opened_on || null };
     if (property) {
-      const { error } = await supabase.from('properties').update(row).eq('id', property.id);
+      if (!baseline) {
+        setBusy(false);
+        return setErr('Still loading the current details — try again in a moment.');
+      }
+      // Send only what changed, and only if nobody saved in between.
+      const changed = Object.fromEntries(Object.entries(row).filter(([k, v]) => (baseline as Record<string, unknown>)[k] !== v));
+      if (Object.keys(changed).length > 0) {
+        const { data, error } = await supabase.from('properties').update(changed).eq('id', property.id).eq('updated_at', baseline.updated_at).select('id');
+        if (error) {
+          setBusy(false);
+          return setErr(dbErrorMessage(error));
+        }
+        if (!data || data.length === 0) {
+          setBusy(false);
+          setConflict(true);
+          return;
+        }
+      }
+      if (offerExtend && extendInventory) {
+        const { error } = await supabase.rpc('set_room_inventory', {
+          p_property_id: property.id, p_effective_from: f.opened_on, p_room_count: earliestRow!.room_count, p_reason: `Opening date moved to ${f.opened_on}`,
+        });
+        if (error) {
+          setBusy(false);
+          return setErr(`Details saved, but room inventory was not extended: ${dbErrorMessage(error)}`);
+        }
+      }
       setBusy(false);
-      if (error) return setErr(dbErrorMessage(error));
     } else {
       // One transaction: the property and its opening inventory are created together.
       const { error } = await supabase.rpc('create_property', {
@@ -108,6 +157,12 @@ function PropertyForm({ property, inventory, onClose }: { property: Property | n
   };
   return (
     <Modal title={property ? `Edit ${property.name}` : 'Add property'} onClose={onClose}>
+      {conflict && (
+        <Notice tone="bad">
+          This property was changed by someone else. Reload to see the latest.{' '}
+          <button className="btn btn-sm" onClick={() => { setConflict(false); void stored.refetch(); }}>Reload</button>
+        </Notice>
+      )}
       {err && <Notice tone="bad">{err}</Notice>}
       {!property && <label className="field">Code (unique, e.g. HV-BOS)<input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />{f.code && !codeValid && <span className="field-error">2–32 letters, numbers, dashes or underscores.</span>}</label>}
       <label className="field">Name<input value={f.name} maxLength={200} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
@@ -126,6 +181,12 @@ function PropertyForm({ property, inventory, onClose }: { property: Property | n
         {openedTooLate && <span className="field-error">Daily data exists from {fmtDate(earliestData)}; the opening date must be on or before it.</span>}
         {openedFarFuture && <span className="field-error">An active property can’t open more than two years from now.</span>}
       </label>
+      {offerExtend && (
+        <label className="row small" style={{ gap: 6 }}>
+          <input type="checkbox" checked={extendInventory} onChange={(e) => setExtendInventory(e.target.checked)} />
+          Also start room inventory on {fmtDate(f.opened_on)} ({earliestRow!.room_count} rooms, as from {fmtDate(earliestRow!.effective_from)})
+        </label>
+      )}
       {!property && (
         <label className="field">
           Rooms at opening
@@ -133,7 +194,7 @@ function PropertyForm({ property, inventory, onClose }: { property: Property | n
           {!roomsValid && <span className="field-error">Enter a whole number of rooms (1–99,999), or leave blank to set later.</span>}
         </label>
       )}
-      <button className="btn btn-primary" disabled={busy || !nameValid || (!property && !codeValid) || !roomsValid || openedTooLate || openedFarFuture} onClick={() => void save()}>{busy ? 'Saving…' : property ? 'Save changes' : 'Add property'}</button>
+      <button className="btn btn-primary" disabled={busy || conflict || (!!property && !baseline) || !nameValid || (!property && !codeValid) || !roomsValid || openedTooLate || openedFarFuture} onClick={() => void save()}>{busy ? 'Saving…' : property ? 'Save changes' : 'Add property'}</button>
       {!property && <p className="small muted">New properties are visible to company-wide roles immediately. Grant owners and investors access under Users & access.</p>}
     </Modal>
   );

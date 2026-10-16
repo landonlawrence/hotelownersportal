@@ -12,3 +12,4 @@ export { dispatchNotifications, sentLog } from './notifications/dispatcher.js';
 export { localScan, signatureMatches, handleGuardDutyResult } from './documents/scan.js';
 export { writeDemoFiles } from './local/seedFiles.js';
 export { simplePdf } from './local/pdf.js';
+export { packageKpiTiles, INCOMPLETE_PERIOD_NOTE } from './pdf/statements.js';

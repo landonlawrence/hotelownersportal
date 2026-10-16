@@ -67,6 +67,21 @@ Behaviour changes to know on staging/production:
 
 Deferred (need product decisions): CapEx threshold and ownership-group admin screens; chart-of-accounts/category editor; automatic tenant subdomains and custom-domain verification; reissuing a lost company-admin invitation; restating history after retroactive room-inventory changes; custom date ranges; lost-authenticator recovery; package editing UI; archive/delete for rejected uploads; pre-signup invitation check; commentary approval step.
 
+## QA round 3 (2026-10-16)
+
+39 findings (R3-01…R3-39) fixed in one migration, `20261016001000_qa_round3.sql` (no data is deleted or rewritten), with regression tests in `packages/core/test/qa-round3.test.ts`, `tests/integration/src/qa-round3.test.ts` and `e2e/tests/qa-round3.spec.ts`.
+
+Behaviour changes to know on staging/production:
+- Property-scoped holders of `financials.edit` / `ingestion.manage` can only write their own properties' mappings; the chart of accounts, company-wide mappings, ingestion sources/routes, integrations and route-token rotation need an all-properties membership. Property-specific mappings are readable only for permitted properties.
+- Audit metadata never carries money values (row diffs list `changed_fields`); platform admins don't see older events that still do, and see tenant profiles only during a support session.
+- Room inventory can be extended before its first period; moving the opening date earlier moves an untouched opening inventory with it.
+- CapEx open commitments are net of invoices linked to them (summary and new package snapshots; published snapshots stay frozen).
+- Monthly actuals accept the company's own reporting account codes when no mapping exists; the approval review of a file over a published statement lists changed/added/removed accounts.
+- Authors, approvers and timestamps of commentary, budget versions and CapEx updates/transactions are set by the database.
+- The last holder of `admin.users`/`admin.company` cannot be denied it; nobody can deny themselves `admin.*`.
+- Allowed email senders change through `add_allowed_sender` / `remove_allowed_sender` (atomic).
+- Notifications for a property name it.
+
 ## Defects found and fixed during verification
 
 - Default privileges granted new tables to `anon` → default privileges revoked globally; test asserts no `anon` grants and RLS on every table.

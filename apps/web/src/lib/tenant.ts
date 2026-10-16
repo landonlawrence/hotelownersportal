@@ -45,10 +45,20 @@ export function toTheme(b: Partial<HostBranding> | null | undefined): BrandTheme
   };
 }
 
+let portalName = NEUTRAL_THEME.portalName;
+let pageName: string | null = null;
+
+/** Per-page document title, "<Page> – <Portal name>" (WCAG 2.4.2). */
+export function setPageTitle(page: string | null): void {
+  pageName = page;
+  document.title = page ? `${page} – ${portalName}` : portalName;
+}
+
 export function applyTheme(theme: BrandTheme): void {
   const root = document.documentElement;
   for (const [k, v] of Object.entries(themeCssVariables(theme))) root.style.setProperty(k, v);
-  document.title = theme.portalName;
+  portalName = theme.portalName;
+  setPageTitle(pageName);
   const icon = document.getElementById('favicon') as HTMLLinkElement | null;
   if (icon) icon.href = theme.faviconUrl ?? '/brands/default/favicon.svg';
 }

@@ -24,6 +24,8 @@ export interface PropertyRef {
   timeZone: string;
   /** Room count effective on a date (from room inventory history). */
   roomsOn?: (date: IsoDate) => number | null;
+  /** First day covered by room inventory history (null when none is configured). */
+  inventoryStart?: IsoDate | null;
 }
 
 export interface ParseContext {

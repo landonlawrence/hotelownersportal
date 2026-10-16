@@ -10,6 +10,7 @@ import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadg
 import { MfaLockedNotice, verifyLink } from '../components/RequirePermission';
 import { DownloadButton } from '../components/DownloadButton';
 import { ScanStatus } from './Documents';
+import { OtherCompanyNotice } from '../components/OtherCompanyNotice';
 
 const PRIORITIES: Record<string, string> = { low: 'Low', normal: 'Normal', high: 'High', urgent: 'Urgent' };
 
@@ -62,18 +63,22 @@ export function CapexPage() {
     return { approved: a.approved + Number(p.approved_budget), actual: a.actual + Number(s?.actual_spend ?? 0), committed: a.committed + Number(s?.open_commitments ?? 0) };
   }, { approved: 0, actual: 0, committed: 0 });
   const f = capexFunds(totals.approved, totals.actual, totals.committed);
+  // Totals are only meaningful when both the projects and their funds summary loaded.
+  const fundsReady = !!projects.data && !!summary.data;
+  const tile = (v: number) => (fundsReady ? formatCurrency(v) : '—');
   return (
     <div className="stack">
       <PageHeader title="Capital expenditures" subtitle={REMAINING_FUNDS_DEFINITION} actions={canAny('capex.edit') && <button className="btn btn-primary" onClick={() => setCreating(true)}>New project</button>} />
       <MfaLockedNotice perms={['capex.edit', 'capex.approve']} />
       <div className="grid grid-kpi">
-        <div className="card kpi"><span className="label">Approved budget</span><span className="value">{formatCurrency(f.approvedBudget)}</span></div>
-        <div className="card kpi"><span className="label">Actual spend</span><span className="value">{formatCurrency(f.actualSpend)}</span></div>
-        <div className="card kpi"><span className="label">Open commitments</span><span className="value">{formatCurrency(f.openCommitments)}</span></div>
-        <div className="card kpi"><span className="label">Remaining funds</span><span className="value">{formatCurrency(f.remaining)}</span></div>
+        <div className="card kpi"><span className="label">Approved budget</span><span className="value">{tile(f.approvedBudget)}</span></div>
+        <div className="card kpi"><span className="label">Actual spend</span><span className="value">{tile(f.actualSpend)}</span></div>
+        <div className="card kpi"><span className="label">Open commitments</span><span className="value">{tile(f.openCommitments)}</span></div>
+        <div className="card kpi"><span className="label">Remaining funds</span><span className="value">{tile(f.remaining)}</span></div>
       </div>
+      {summary.error && !projects.error && <ErrorState error={summary.error} retry={() => void summary.refetch()} />}
       <Card flush title={<label className="field">Status<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All</option>{['draft', 'pending_approval', 'approved', 'in_progress', 'on_hold', 'completed', 'rejected', 'cancelled'].map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}</select></label>}>
-        {projects.isLoading ? <Loading /> : projects.error ? <ErrorState error={projects.error} /> : rows.length === 0 ? <Empty title="No projects">{draftsLocked && 'Verify with 2FA to see drafts and projects awaiting your approval.'}</Empty> : (
+        {projects.isLoading ? <Loading /> : projects.error ? <ErrorState error={projects.error} retry={() => void projects.refetch()} /> : rows.length === 0 ? <Empty title="No projects">{draftsLocked && 'Verify with 2FA to see drafts and projects awaiting your approval.'}</Empty> : (
           <div className="table-wrap">
             <table className="data">
               <thead><tr><th>Project</th><th>Property</th><th>Category</th><th>Status</th><th className="num">Approved</th><th className="num">Spent</th><th className="num">Committed</th><th className="num">Remaining</th><th>Progress</th><th>Target</th></tr></thead>
@@ -164,8 +169,9 @@ export function CapexProjectPage() {
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
   if (p.isLoading) return <Loading />;
-  if (!p.data) return <Empty title="Project not found">It may not exist or you may not have access.</Empty>;
-  const proj = p.data;
+  if (!p.data) return <Empty page title="Project not found">It may not exist or you may not have access.</Empty>;
+  const proj = p.data as Project & { company_id: string };
+  if (proj.company_id !== company.company_id) return <OtherCompanyNotice companyId={proj.company_id} propertyId={proj.property_id} fallbackName={proj.title} />;
   const s = summary.data?.find((x) => x.project_id === proj.id);
   const f = capexFunds(Number(proj.approved_budget), Number(s?.actual_spend ?? 0), Number(s?.open_commitments ?? 0));
   const canEdit = can('capex.edit', proj.property_id);
@@ -551,7 +557,7 @@ function AttachModal({ project, onClose }: { project: Project; onClose: () => vo
   return (
     <Modal title="Attach quote, invoice, receipt or photo" onClose={onClose}>
       {err && <Notice tone="bad">{err}</Notice>}
-      <input type="file" accept=".pdf,.xlsx,.docx,.csv,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <input type="file" aria-label="File" accept=".pdf,.xlsx,.docx,.csv,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
       <label className="field">Title<input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
       <label className="field">Visibility<select value={vis} onChange={(e) => setVis(e.target.value)}><option value="owner">Owners only</option><option value="general">Owners & investors</option><option value="internal">Internal</option></select></label>
       <p className="small muted">Files are scanned before anyone else can open them.</p>

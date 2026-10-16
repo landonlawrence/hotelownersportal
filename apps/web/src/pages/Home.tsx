@@ -112,7 +112,7 @@ export function GettingStarted({ compact = false }: { compact?: boolean }) {
       id: 'data', icon: 'upload', title: 'Bring in your numbers',
       detail: 'Upload a daily performance, monthly P&L or budget file, or set up an email feed from your PMS.',
       done: status.data.data > 0,
-      action: { label: 'Go to Data Imports', to: '/imports' },
+      action: { label: 'Go to Data imports', to: '/imports' },
     },
   ];
   const done = steps.filter((s) => s.done).length;
@@ -170,10 +170,8 @@ export function HomePage() {
 
   if (properties.length > 0 && canSeePerformance) {
     return (
-      <div className="stack">
-        <GettingStarted compact />
-        <OverviewPage />
-      </div>
+      // The setup checklist goes below the page heading (one h1, first).
+      <OverviewPage intro={<GettingStarted compact />} />
     );
   }
 

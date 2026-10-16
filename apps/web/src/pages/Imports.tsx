@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { listParsers } from '@hop/core';
+import { formatCurrency, formatImportPeriod, listParsers } from '@hop/core';
 import { IngestionSourcesCard } from './IngestionSources';
 import { supabase, unwrap } from '../lib/supabase';
 import { apiFetch } from '../lib/api';
 import { usePortal, useCompany } from '../state/portal';
-import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate } from '../components/ui';
+import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, errorMessage, fmtDate, fmtMonth } from '../components/ui';
 import { MfaLockedNotice } from '../components/RequirePermission';
 
 interface Run {
@@ -28,6 +28,18 @@ const FIELD_LABEL: Record<string, string> = {
   physical_rooms: 'Rooms', rooms_out_of_order: 'Out of order', rooms_sold: 'Rooms sold', rooms_comp: 'Comp rooms', room_revenue: 'Room revenue',
   fb_revenue: 'F&B revenue', other_revenue: 'Other revenue', total_revenue: 'Total revenue', source_metrics: 'Source metrics',
 };
+/** Where to fix an issue. */
+const ISSUE_LINK: Record<string, { to: string; label: string }> = {
+  unmapped_account: { to: '/financials?tab=mappings', label: 'Open account mappings' },
+  unknown_inventory: { to: '/admin?tab=properties', label: 'Open room inventory' },
+};
+
+interface StatementReplacement {
+  propertyId: string; periodMonth: string; revision: number; changed: number; added: number; removed: number;
+  lineChanges?: Array<{ accountId: string; code: string; name: string; change: 'changed' | 'added' | 'removed'; old: number | null; new: number | null }>;
+  replacesStatement?: boolean;
+}
+
 const show = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
 
 export function ImportsPage() {
@@ -58,7 +70,7 @@ export function ImportsPage() {
         </Card>
       )}
       <Card flush title="Import history">
-        {runs.isLoading ? <Loading /> : runs.error ? <ErrorState error={runs.error} /> : (runs.data ?? []).length === 0 ? <Empty title="No imports yet" /> : (
+        {runs.isLoading ? <Loading /> : runs.error ? <ErrorState error={runs.error} retry={() => void runs.refetch()} /> : (runs.data ?? []).length === 0 ? <Empty title="No imports yet" /> : (
           <div className="table-wrap">
             <table className="data">
               <thead><tr><th>Received</th><th>File</th><th>Type</th><th>Source</th><th>Status</th><th className="num">Rows</th><th className="num">New / revised / same</th><th className="num">Issues</th></tr></thead>
@@ -127,7 +139,7 @@ function UploadImport({ onClose, sources }: { onClose: () => void; sources: Arra
     }
   };
   return (
-    <Modal title="Upload data file" onClose={onClose}>
+    <Modal title="Upload data file" onClose={onClose} confirmDiscard={!done}>
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
       <label className="field">Report type<select value={type} onChange={(e) => setType(e.target.value)}>{types.map((t) => <option key={t.v} value={t.v}>{TYPE_LABEL[t.v]}</option>)}</select></label>
       <label className="field">Source (optional)<select value={source} onChange={(e) => setSource(e.target.value)}><option value="">Manual upload (property codes)</option>{sources.filter((s) => s.report_type === type).map((s) => <option key={s.id} value={s.id} disabled={!s.active}>{s.name}{s.active ? '' : ' (paused)'}</option>)}</select></label>
@@ -156,8 +168,13 @@ export function ImportDetailPage() {
   });
   const [err, setErr] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const details = run.data?.result?.preview?.conflictDetails ?? [];
+  // Monthly actuals over a published statement replace the whole statement (R3-07).
+  const replacements = details.filter((c) => c.replacesStatement) as unknown as Array<StatementReplacement>;
+  const removedTotal = replacements.reduce((a, c) => a + Number(c.removed ?? 0), 0);
   const act = async (path: 'approve' | 'reject' | 'retry') => {
     if (pending) return;
+    if (path === 'approve' && removedTotal > 0 && !window.confirm(`Approving removes ${removedTotal} account(s) that are not in this file from the published statement(s). The previous revision stays in history. Approve?`)) return;
     let note: string | null = null;
     if (path === 'reject') {
       const answer = window.prompt('Reject this import? Nothing from it will be loaded. Optionally add a note for the record:', '');
@@ -192,14 +209,25 @@ export function ImportDetailPage() {
           </>
         } />
       {err && <Notice tone="bad">{err}</Notice>}
-      {r.status === 'needs_review' && <Notice tone="warn">{r.conflicts} value(s) differ from data already loaded. Approving replaces them and keeps the previous values in revision history{r.report_type === 'monthly_actuals' ? ' (published statements receive a new draft revision)' : ''}.</Notice>}
+      {r.status === 'needs_review' && r.report_type === 'monthly_actuals' && replacements.length > 0 ? (
+        replacements.map((c, i) => (
+          <Notice key={i} tone={Number(c.removed) > 0 ? 'bad' : 'warn'}>
+            This file replaces the whole {properties.find((p) => p.id === c.propertyId)?.name ?? 'property'} {fmtMonth(String(c.periodMonth))} statement:{' '}
+            {c.changed} changed, {c.added} added, <strong>{c.removed} account(s) will be removed</strong>. Approving creates a new draft revision (revision {Number(c.revision) + 1}); the published revision stays in history.
+          </Notice>
+        ))
+      ) : r.status === 'needs_review' ? (
+        <Notice tone="warn">
+          {r.report_type === 'monthly_actuals' ? `${r.conflicts} statement(s) differ from what is already loaded.` : `${r.conflicts} ${r.report_type === 'daily_performance' ? 'day(s)' : 'value(s)'} differ from data already loaded.`} Approving replaces them and keeps the previous values in revision history.
+        </Notice>
+      ) : null}
       {r.status === 'duplicate' && <Notice tone="info">Identical to a previously imported file — nothing was changed. {r.duplicate_of_run_id && <Link to={`/imports/${r.duplicate_of_run_id}`}>View original import</Link>}</Notice>}
       {r.last_error && <Notice tone="bad">Processing error (attempt {r.attempts}): {r.last_error}</Notice>}
       <Card title="Details">
         <dl className="kv">
           <dt>Source</dt><dd>{r.ingestion_sources?.name ?? 'Manual upload'} ({r.source_files?.received_via}{r.source_files?.sender ? `, ${r.source_files.sender}` : ''})</dd>
           <dt>Received</dt><dd>{fmtDate(r.created_at, { dateStyle: 'medium', timeStyle: 'short' } as Intl.DateTimeFormatOptions)}</dd>
-          <dt>Period</dt><dd>{r.period_start ? `${fmtDate(r.period_start)} – ${fmtDate(r.period_end)}` : '—'}</dd>
+          <dt>Period</dt><dd>{formatImportPeriod(r.report_type, r.period_start, r.period_end)}</dd>
           <dt>Rows</dt><dd>{r.rows_valid ?? 0} valid of {r.rows_total ?? 0} ({ROW_UNIT[r.report_type]})</dd>
           <dt>Result</dt><dd>{r.status === 'completed' ? `${r.rows_inserted ?? 0} new, ${r.rows_updated ?? 0} revised, ${r.rows_unchanged ?? 0} unchanged ${RESULT_UNIT[r.report_type]}` : '—'}</dd>
           <dt>Replacement rule</dt><dd>{r.replace_existing ? 'Replace existing values (history kept)' : 'Review required for changed values'}</dd>
@@ -207,10 +235,24 @@ export function ImportDetailPage() {
           {r.review_note && <><dt>Review note</dt><dd>{r.review_note}</dd></>}
         </dl>
       </Card>
-      {conflicts.length > 0 && (
+      {replacements.map((c, i) => (
+        <Card key={`rep-${i}`} flush title={`Statement changes — ${properties.find((p) => p.id === c.propertyId)?.code ?? '—'} ${fmtMonth(String(c.periodMonth))}`}>
+          <div className="table-wrap"><table className="data"><thead><tr><th>Account</th><th>Change</th><th className="num">Published</th><th className="num">In this file</th></tr></thead><tbody>
+            {(c.lineChanges ?? []).map((l) => (
+              <tr key={l.accountId} className={l.change === 'removed' ? 'row-removed' : undefined}>
+                <td>{l.name}<div className="small muted">{l.code}</div></td>
+                <td><StatusBadge status={l.change === 'removed' ? 'rejected' : l.change === 'added' ? 'pending' : 'in_review'} label={l.change === 'removed' ? 'will be removed' : l.change} /></td>
+                <td className="num">{l.old === null ? '—' : formatCurrency(Number(l.old))}</td>
+                <td className="num">{l.new === null ? '—' : formatCurrency(Number(l.new))}</td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        </Card>
+      ))}
+      {conflicts.filter((c) => !c.replacesStatement).length > 0 && (
         <Card title={`Changed values${conflicts.length > 100 ? ' (first 100)' : ''}`} flush>
           <div className="table-wrap"><table className="data"><thead><tr><th>Property</th><th>Date / period</th><th>Change</th></tr></thead><tbody>
-            {conflicts.slice(0, 100).map((c, i) => {
+            {conflicts.filter((c) => !c.replacesStatement).slice(0, 100).map((c, i) => {
               const code = properties.find((p) => p.id === c.propertyId)?.code ?? '—';
               const existing = (c.existing ?? null) as Record<string, unknown> | null;
               const incoming = (c.incoming ?? null) as Record<string, unknown> | null;
@@ -218,7 +260,7 @@ export function ImportDetailPage() {
               return (
                 <tr key={i}>
                   <td>{code}</td>
-                  <td className="small">{fmtDate(String(c.businessDate ?? c.periodMonth ?? ''))}</td>
+                  <td className="small">{c.businessDate ? fmtDate(String(c.businessDate)) : c.periodMonth ? fmtMonth(String(c.periodMonth)) : '—'}</td>
                   <td className="small" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
                     {changed.length > 0
                       ? changed.map((k) => <div key={k}><strong>{FIELD_LABEL[k] ?? k.replace(/_/g, ' ')}</strong>: {show(existing![k])} → {show(incoming![k])}</div>)
@@ -233,7 +275,7 @@ export function ImportDetailPage() {
       <Card title={`Validation issues (${r.issues_errors + r.issues_warnings})${(issues.data?.length ?? 0) < r.issues_errors + r.issues_warnings ? ` — showing first ${issues.data?.length ?? 0}` : ''}`} flush>
         {(issues.data ?? []).length === 0 ? <Empty title="No issues" /> : (
           <div className="table-wrap"><table className="data"><thead><tr><th>Severity</th><th>Row</th><th>Field</th><th>Issue</th></tr></thead><tbody>
-            {issues.data!.map((i) => <tr key={i.id}><td><StatusBadge status={i.severity === 'error' ? 'error' : 'pending'} label={i.severity} /></td><td>{i.row_number ?? 'file'}</td><td>{i.field ?? '—'}</td><td>{i.message}<div className="small muted">{i.code}</div></td></tr>)}
+            {issues.data!.map((i) => <tr key={i.id}><td><StatusBadge status={i.severity === 'error' ? 'error' : 'pending'} label={i.severity} /></td><td>{i.row_number ?? 'file'}</td><td>{i.field ?? '—'}</td><td>{i.message}{ISSUE_LINK[i.code] && <> <Link to={ISSUE_LINK[i.code]!.to}>{ISSUE_LINK[i.code]!.label}</Link></>}<div className="small muted">{i.code}</div></td></tr>)}
           </tbody></table></div>
         )}
       </Card>

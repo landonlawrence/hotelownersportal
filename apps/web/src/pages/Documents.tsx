@@ -80,8 +80,8 @@ export function DocumentsPage() {
                         ))}
                       </td>
                       <td className="row" style={{ gap: 6 }}>
-                        {d.current_version_id && <button className="btn btn-sm" onClick={() => download(d.current_version_id!)}>Download</button>}
-                        {(d.property_id ? can('documents.upload', d.property_id) : company.all_properties && can('documents.upload')) && <button className="btn btn-sm btn-ghost" onClick={() => setUploading({ documentId: d.id, propertyId: d.property_id })}>New version</button>}
+                        {d.current_version_id && <button className="btn btn-sm" aria-label={`Download ${d.title}`} onClick={() => download(d.current_version_id!)}>Download</button>}
+                        {(d.property_id ? can('documents.upload', d.property_id) : company.all_properties && can('documents.upload')) && <button className="btn btn-sm btn-ghost" aria-label={`New version of ${d.title}`} onClick={() => setUploading({ documentId: d.id, propertyId: d.property_id })}>New version</button>}
                       </td>
                     </tr>
                   );
@@ -184,7 +184,8 @@ function UploadModal({ categories, target, onClose }: { categories: Array<{ key:
     }
   };
   return (
-    <Modal title={target.documentId ? 'Upload new version' : 'Upload document'} onClose={onClose}>
+    // Once the upload finished there is nothing left to discard.
+    <Modal title={target.documentId ? 'Upload new version' : 'Upload document'} onClose={onClose} confirmDiscard={!result}>
       {err && <Notice tone="bad">{err}</Notice>}
       {result ? (
         <>

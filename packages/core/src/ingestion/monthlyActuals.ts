@@ -57,7 +57,7 @@ export function parseMonthlyActuals(table: Table, ctx: ParseContext): ParseResul
     if (amount === null) return;
     const accountId = ctx.accountMapping!(acct, property.id);
     if (!accountId) {
-      issues.push({ severity: 'error', row: rowNo, field: 'account_code', code: 'unmapped_account', message: `Source account "${acct}" has no reporting-account mapping` });
+      issues.push({ severity: 'error', row: rowNo, field: 'account_code', code: 'unmapped_account', message: `Account "${acct}" is not a reporting account code and has no mapping; add one under Budgets & financials > Account mappings` });
       return;
     }
     const key = `${property.id}|${period}|${acct}`;

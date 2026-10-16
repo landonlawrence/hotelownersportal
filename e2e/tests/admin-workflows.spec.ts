@@ -3,7 +3,7 @@ import { login } from './helpers';
 
 test('finance publishes a draft statement after review; owner then sees it', async ({ page, browser }) => {
   await login(page, 'finance@harborview.example');
-  await page.getByRole('link', { name: 'Budgets & Financials' }).click();
+  await page.getByRole('link', { name: 'Budgets & financials' }).click();
   await page.getByLabel('Property').selectOption({ label: 'Harborview Seattle Waterfront' });
   await page.getByRole('row', { name: /in review/ }).getByRole('link').first().click();
   await expect(page.getByText('Draft — not visible to owners')).toBeVisible();
@@ -52,7 +52,7 @@ test('admin invites an owner who accepts and sees only the granted hotel; then a
 
 test('import upload with an invalid property is rejected with row-level issues', async ({ page }) => {
   await login(page, 'finance@harborview.example');
-  await page.getByRole('link', { name: 'Data Imports' }).click();
+  await page.getByRole('link', { name: 'Data imports' }).click();
   await page.getByRole('button', { name: 'Upload file' }).click();
   await page.getByLabel('Data file', { exact: true }).setInputFiles({
     name: 'bad-flash.csv',

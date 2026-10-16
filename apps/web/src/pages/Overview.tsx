@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { capexFunds, formatCurrency, formatPercent, isIsoDate, maxIsoDate, REMAINING_FUNDS_DEFINITION, type PeriodView } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
-import { defaultAsOf, requestedRange, toTrendPoints, usePerformance, type TrendMetric } from '../lib/performance';
+import { actualsRange, defaultAsOf, requestedRange, toTrendPoints, usePerformance, type TrendMetric } from '../lib/performance';
 import { DownloadButton } from '../components/DownloadButton';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Notice, PageHeader, Segmented, StatusBadge, fmtDate, fmtMonth } from '../components/ui';
@@ -21,7 +21,7 @@ const METRICS: Array<{ value: TrendMetric; label: string; kind: 'pct' | 'money_c
 
 const VIEW_LABEL: Record<PeriodView, string> = { day: 'Day', mtd: 'Month to date', month: 'Month', ytd: 'Year to date', custom: 'Custom' };
 
-export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
+export function OverviewPage({ propertyId, intro }: { propertyId?: string; intro?: ReactNode } = {}) {
   const { properties: allProperties, canAny, can } = usePortal();
   const properties = useMemo(() => (propertyId ? allProperties.filter((p) => p.id === propertyId) : allProperties), [allProperties, propertyId]);
   const company = useCompany();
@@ -87,14 +87,14 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
             : d
               ? requested.comparable.inProgress && requested.comparable.to >= requested.range.from
                 ? `${VIEW_LABEL[view]} · ${fmtDate(requested.range.from)} – ${fmtDate(requested.comparable.to)} (${view === 'month' ? 'month' : 'period'} in progress) · daily figures are provisional`
-                : `${VIEW_LABEL[view]} · ${fmtDate(requested.range.from)} – ${fmtDate(requested.range.to)} · daily figures are provisional`
+                : `${VIEW_LABEL[view]} · ${fmtDate(requested.range.from)} – ${fmtDate(requested.range.to)}${view === 'month' ? ' (closed)' : ''} · daily figures are provisional`
               : company.company_name
         }
         actions={
           d && !stale ? (
             <DownloadButton
               label="Export CSV"
-              run={() => downloadFromApi(`/exports/performance.csv?company_id=${company.company_id}&from=${requested.range.from}&to=${requested.range.to}&grain=total${(propertyId ? [propertyId] : selected).length ? `&property_ids=${(propertyId ? [propertyId] : selected).join(',')}` : ''}`, 'performance.csv')}
+              run={() => downloadFromApi(`/exports/performance.csv?company_id=${company.company_id}&from=${actualsRange(requested).from}&to=${actualsRange(requested).to}&grain=total${(propertyId ? [propertyId] : selected).length ? `&property_ids=${(propertyId ? [propertyId] : selected).join(',')}` : ''}`, 'performance.csv')}
             />
           ) : (
             <button className="btn" disabled>
@@ -103,6 +103,7 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
           )
         }
       />
+      {intro}
       <div className="filter-bar">
         <PeriodFilter view={view} asOf={asOf} onView={setView} onAsOf={setAsOf} max={maxAsOf} />
         {!propertyId && <PropertyMultiSelect properties={properties} selected={selected} onChange={setSelected} />}
@@ -136,7 +137,7 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
           {d.priorRange.containsLeapDay && <Notice tone="info">This comparison spans 29 February; prior-year totals cover one day fewer/more. Ratios remain comparable.</Notice>}
           {(() => {
             // Ratio comparisons are only like-for-like when every expected hotel-day is in.
-            const ratioNote = d.current.partial ? 'Comparisons hidden — not all hotels reported' : undefined;
+            const ratioNote = d.current.partial ? (scope.length === 1 ? 'Comparisons hidden — this property hasn’t reported every day' : 'Comparisons hidden — not all hotels reported') : undefined;
             const totalNote = d.current.partial ? 'Comparisons hidden — incomplete period' : undefined;
             const bud = (v: number | null | undefined) => (!showBudget ? undefined : v ?? null);
             return (
@@ -149,7 +150,7 @@ export function OverviewPage({ propertyId }: { propertyId?: string } = {}) {
               </div>
             );
           })()}
-          {!d.budget && showBudget && <p className="small muted">Budget comparison unavailable: not every selected property has an approved budget for this period.</p>}
+          {!d.budget && showBudget && <p className="small muted">{scope.length === 1 ? 'Budget comparison unavailable: this property has no approved budget for this period.' : 'Budget comparison unavailable: not every property expected to report has an approved budget for this period.'}</p>}
 
           <Card title={`${m.label} trend${d.trendGrain === 'day' ? ` — ${fmtMonth(asOf)}` : ' — trailing 12 months'}`} actions={<Segmented label="Trend metric" value={metric} onChange={setMetric} options={METRICS} />}>
             <TrendChart data={toTrendPoints(d, metric)} kind={m.kind} title={m.label} currency={currency} />

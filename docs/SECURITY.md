@@ -25,6 +25,12 @@ Policies use `app.permitted_property_ids(perm)` / `app.permitted_company_ids(per
 
 Per-membership allow/deny overrides and per-property permission lists refine these defaults (e.g. the demo investor's grant is limited to performance + packages).
 
+**Company-wide rows need company-wide access.** A company-level role permission is not enough to write configuration that affects every property. Rows with a `property_id` are writable only for `property_id = any(app.permitted_property_ids(perm))` (in both `USING` and `WITH CHECK`, so an update cannot move a row to another property); rows without one, the chart of accounts, ingestion sources and routes, integration connections and route-token rotation need `app.has_company_wide_permission(perm, company_id)` (an active all-properties membership or a support session). Property-specific code and account mappings are readable only for permitted properties.
+
+**Authorship is set by the database.** Author, publisher, approver and timestamp columns on commentary, budget versions and CapEx updates/transactions are filled by `BEFORE` triggers for client writes; values sent by the browser are ignored.
+
+**The last administrator stays an administrator.** Administrators cannot deny themselves `admin.*`, and a deny of `admin.users`/`admin.company` is refused when no other active membership effectively holds it.
+
 ## Specific controls
 
 | Risk | Control | Verified by |
@@ -42,6 +48,9 @@ Per-membership allow/deny overrides and per-property permission lists refine the
 | Spoofed report emails | secret route token + sender allow-list + SPF/DKIM + route property mappings | `imports.test.ts` |
 | Formula injection in exports | CSV cell neutralisation | `ingestion.test.ts` |
 | Privileged actions without MFA | `aal2` required for privileged permissions | `foundation.test.ts` (TOTP step-up) |
+| Property-scoped editors changing shared configuration | company-wide permission for company-wide rows; property checks in `USING` and `WITH CHECK` | `qa-round3.test.ts` (R3-01, R3-19) |
+| Forged authors and timestamps | `BEFORE` triggers set author/approver/time columns | `qa-round3.test.ts` (R3-08) |
+| Platform staff reading tenant data | money-free audit metadata, profiles only in support sessions | `qa-round3.test.ts` (R3-02) |
 | Support staff over-reach | no standing access; time-boxed, MFA-gated, read-only, audited sessions endable by company admins | `foundation.test.ts` |
 | Client privilege defaults | default privileges revoked; test asserts `anon` has no table grants and every table has RLS | `foundation.test.ts` |
 | Secrets exposure | browser has publishable key only; lint rule; Lambda env has secret ARN only | CDK assertion tests, ESLint |
@@ -51,7 +60,7 @@ Per-membership allow/deny overrides and per-property permission lists refine the
 
 ## Audit
 
-`audit_events` is append-only (trigger blocks update/delete). Row-change triggers cover companies, branding, domains, modules, memberships, overrides, grants, properties, inventory, support sessions, ingestion config, accounts/mappings, CapEx; RPCs log publication, approvals, invitations, downloads (authorized and denied), imports and exports. Company admins with `audit.view` see their company's events; platform admins see all audit metadata (which never contains financial figures).
+`audit_events` is append-only (trigger blocks update/delete). Row-change triggers cover companies, branding, domains, modules, memberships, overrides, grants, properties, inventory, support sessions, ingestion config, accounts/mappings, CapEx; RPCs log publication, approvals, invitations, downloads (authorized and denied), imports and exports. Company admins with `audit.view` see their company's events. Platform admins see tenant audit events without a support session only because audit metadata never contains financial figures: `app.audit()` strips money fields (amounts, budgets, thresholds, raw source values) from every event, and row-change audits record changed money columns by name only (`changed_fields`), never their values. `audit_events` is append-only, so events written before migration `20261016001000_qa_round3` are not rewritten; the read policy hides from platform admins any event whose metadata still carries a money field. Tenant user profiles (names, emails) are visible to platform staff only inside an active, 2FA-verified support session (ADR-008: no implicit access to tenant data).
 
 ## Known limitations / follow-ups
 

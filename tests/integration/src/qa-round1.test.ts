@@ -279,14 +279,14 @@ describe('R1-14 / R1-16 CapEx routing and numbering', () => {
     const fin = await signIn(USER.hvFinance);
     expect((await fin.db.from('notifications').select('kind').eq('entity_id', small)).data).toEqual([{ kind: 'capex_approval_requested' }]);
     expect((await fin.db.rpc('decide_capex_request', { p_request_id: smallReq, p_decision: 'approved' })).data).toBe('approved');
-    expect((await ops.db.from('notifications').select('kind, title').eq('entity_id', small)).data).toEqual([{ kind: 'capex_request_decided', title: 'CapEx request approved: QA small corporate-only' }]);
+    expect((await ops.db.from('notifications').select('kind, title').eq('entity_id', small)).data).toEqual([{ kind: 'capex_request_decided', title: 'CapEx request approved: QA small corporate-only — Harborview Seattle Waterfront' }]);
 
     const { data: big } = await ops.db.rpc('create_capex_project', { p_property_id: PROPERTY.sea, p_title: 'QA owner-level item', p_category: 'other', p_description: null, p_requested_budget: 30000 });
     const { data: bigReq } = await ops.db.rpc('submit_capex_request', { p_project_id: big, p_new_total: 30000, p_justification: 'Above the owner threshold' });
     expect((await owner.db.from('notifications').select('kind').eq('entity_id', big)).data).toEqual([{ kind: 'capex_approval_requested' }]);
     expect((await owner.db.rpc('decide_capex_request', { p_request_id: bigReq, p_decision: 'rejected', p_comment: 'Not this year' })).data).toBe('rejected');
     const { data: n } = await ops.db.from('notifications').select('title, body').eq('entity_id', big);
-    expect(n).toEqual([{ title: 'CapEx request rejected: QA owner-level item', body: 'Reason: Not this year' }]);
+    expect(n).toEqual([{ title: 'CapEx request rejected: QA owner-level item — Harborview Seattle Waterfront', body: 'Reason: Not this year' }]);
   });
 
   it('concurrent project creation allocates distinct numbers', async () => {

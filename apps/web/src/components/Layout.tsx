@@ -1,11 +1,11 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ROLE_LABELS, type Permission, type Role } from '@hop/core';
 import { supabase } from '../lib/supabase';
 import { usePortal, useCompany } from '../state/portal';
 import { Icon, type IconName } from './icons';
-import { Loading } from './ui';
+import { Loading, pageHeadingSeq, requestHeadingFocus } from './ui';
 import { useSectionState } from './RequirePermission';
 
 interface NavItem {
@@ -28,16 +28,16 @@ const GROUPS: Array<{ label?: string; items: NavItem[] }> = [
   {
     label: 'Finance',
     items: [
-      { to: '/financials', label: 'Budgets & Financials', icon: 'money', perms: ['financials.view', 'budgets.view', 'financials.view_draft'], module: 'financials' },
+      { to: '/financials', label: 'Budgets & financials', icon: 'money', perms: ['financials.view', 'budgets.view', 'financials.view_draft'], module: 'financials' },
       { to: '/capex', label: 'CapEx', icon: 'tool', perms: ['capex.view'], module: 'capex' },
-      { to: '/reports', label: 'Owner Reports', icon: 'report', perms: ['reports.view', 'reports.edit'], module: 'reports' },
+      { to: '/reports', label: 'Owner reports', icon: 'report', perms: ['reports.view', 'reports.edit'], module: 'reports' },
     ],
   },
   {
     label: 'Files & data',
     items: [
       { to: '/documents', label: 'Documents', icon: 'folder', perms: ['documents.view', 'documents.view_owner', 'documents.view_internal', 'documents.view_confidential', 'documents.upload', 'documents.manage'], module: 'documents' },
-      { to: '/imports', label: 'Data Imports', icon: 'upload', perms: ['ingestion.view', 'ingestion.manage', 'financials.edit', 'budgets.edit'], module: 'ingestion' },
+      { to: '/imports', label: 'Data imports', icon: 'upload', perms: ['ingestion.view', 'ingestion.manage', 'financials.edit', 'budgets.edit'], module: 'ingestion' },
     ],
   },
   {
@@ -50,7 +50,7 @@ const GROUPS: Array<{ label?: string; items: NavItem[] }> = [
   },
 ];
 
-type ItemState = 'open' | 'locked' | 'hidden';
+type ItemState = 'open' | 'locked' | 'hidden' | 'disabled';
 
 export function Layout() {
   const { ctx, company, setCompanyId, refresh } = usePortal();
@@ -91,6 +91,7 @@ export function Layout() {
   useEffect(() => {
     if (!narrow) setOpen(false);
   }, [narrow]);
+  useRouteFocus();
   const unread = useQuery({
     queryKey: ['unread', c.company_id],
     refetchInterval: 60_000,
@@ -115,9 +116,15 @@ export function Layout() {
           {c.branding?.logo_mark_url ? <img src={c.branding.logo_mark_url} alt="" /> : <span className="brand-mark" aria-hidden>{portalName.slice(0, 1).toUpperCase()}</span>}
           <span className="brand-name">{portalName}</span>
         </div>
-        <nav onClick={() => setOpen(false)}>
+        <nav
+          onClick={() => {
+            // Move focus out of the drawer before it becomes inert, so it never drops to <body>.
+            if (open) document.getElementById('main')?.focus({ preventScroll: true });
+            setOpen(false);
+          }}
+        >
           {GROUPS.map((g, gi) => {
-            const items = g.items.map((n) => ({ n, s: state(n) })).filter((x) => x.s !== 'hidden');
+            const items = g.items.map((n) => ({ n, s: state(n) })).filter((x) => x.s === 'open' || x.s === 'locked');
             if (items.length === 0) return null;
             return (
               <div className="nav-group" key={gi}>
@@ -196,6 +203,24 @@ export function Layout() {
       </div>
     </div>
   );
+}
+
+/**
+ * After a route change (not the first load), move focus to the new page's h1 — or #main while
+ * the page is still loading — so keyboard and screen-reader users land on the new content.
+ */
+export function useRouteFocus() {
+  const { pathname } = useLocation();
+  // Captured while rendering the new route, before the new page's heading mounts.
+  const nav = useRef({ path: pathname, seq: pageHeadingSeq() });
+  if (nav.current.path !== pathname) nav.current = { path: pathname, seq: pageHeadingSeq() };
+  const handled = useRef(pathname);
+  useEffect(() => {
+    // Not on the first load (and only once per route change).
+    if (handled.current === pathname) return;
+    handled.current = pathname;
+    return requestHeadingFocus(nav.current.seq);
+  }, [pathname]);
 }
 
 const NARROW = '(max-width: 900px)';

@@ -5,6 +5,7 @@ import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, Loading, PageHeader, StatusBadge, fmtDate, fmtExclusiveEnd } from '../components/ui';
 import { OverviewPage } from './Overview';
 import { Icon } from '../components/icons';
+import { OtherCompanyNotice } from '../components/OtherCompanyNotice';
 
 export function PropertiesPage() {
   const { properties, isCompanyAdmin } = usePortal();
@@ -53,7 +54,7 @@ export function PropertiesPage() {
 
 export function PropertyDetailPage() {
   const { id } = useParams();
-  const { properties, ctx, company, setCompanyId } = usePortal();
+  const { properties, ctx, company } = usePortal();
   const property = properties.find((p) => p.id === id);
   // Deep links may point at a property in another of the user's companies (RLS decides visibility).
   const elsewhere = useQuery({
@@ -78,19 +79,9 @@ export function PropertyDetailPage() {
     queryFn: async () => unwrap(await supabase.from('property_reporting_config').select('ooo_treatment, comp_treatment').eq('property_id', id!).maybeSingle()) as { ooo_treatment: string; comp_treatment: string } | null,
   });
   if (!property) {
-    if (otherCompany) {
-      return (
-        <Card>
-          <Empty title={`${elsewhere.data!.name} belongs to ${otherCompany.company_name}`}>
-            <span className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
-              <button className="btn btn-primary" onClick={() => setCompanyId(otherCompany.company_id)}>Switch to {otherCompany.company_name}</button>
-            </span>
-          </Empty>
-        </Card>
-      );
-    }
+    if (otherCompany) return <OtherCompanyNotice companyId={otherCompany.company_id} propertyId={elsewhere.data!.id} fallbackName={elsewhere.data!.name} />;
     if (elsewhere.isLoading) return <Loading />;
-    return <Empty title="Property not found">It may not exist, or you may not have access to it.</Empty>;
+    return <Empty page title="Property not found">It may not exist, or you may not have access to it.</Empty>;
   }
   return (
     <div className="stack">

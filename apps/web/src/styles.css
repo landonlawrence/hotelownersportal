@@ -10,7 +10,7 @@
   --surface-sunken: #f7f7f5;
   --ink: #111827;
   --ink-2: #4b5563;
-  --ink-3: #6b7280;
+  --ink-3: #5f6672;
   --hairline: #e5e7eb;
   --hairline-strong: #d1d5db;
   --focus: #2563eb;
@@ -51,7 +51,10 @@ h1 { font-size: 22px; font-weight: 650; }
 h2 { font-size: 16px; font-weight: 650; }
 h3 { font-size: 14px; font-weight: 650; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Focus rings keep 3:1 on brand surfaces: light ring in the sidebar, a surface-coloured gap around filled controls. */
+.sidebar :focus-visible { outline-color: var(--brand-on-primary); }
+.btn-primary:focus-visible, .segmented [aria-pressed="true"]:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); outline-offset: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .muted { color: var(--ink-3); }
 .small { font-size: 12px; }
@@ -72,7 +75,7 @@ h3 { font-size: 14px; font-weight: 650; }
 .brand-name { line-height: 1.2; }
 .sidebar nav { display: flex; flex-direction: column; gap: 14px; }
 .nav-group { display: flex; flex-direction: column; gap: 2px; }
-.nav-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.55; padding: 0 10px 4px; font-weight: 700; }
+.nav-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.8; padding: 0 10px 4px; font-weight: 700; }
 .sidebar nav a { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--radius-sm); color: inherit; text-decoration: none; opacity: 0.82; font-size: 13.5px; }
 .sidebar nav a svg { flex: none; opacity: 0.9; }
 .sidebar nav a:hover { background: rgba(255, 255, 255, 0.08); opacity: 1; }
@@ -140,7 +143,7 @@ table.data td.cell-title { overflow-wrap: anywhere; min-width: 160px; max-width:
 .btn-danger { color: var(--bad); border-color: #f1b5b5; }
 .btn-sm { padding: 3px 8px; min-height: 28px; font-size: 12px; }
 .btn-ghost { border-color: transparent; background: transparent; }
-label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+label.field, div.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
 input, select, textarea { font: inherit; color: var(--ink); border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); padding: 7px 10px; background: var(--surface); min-height: 34px; }
 textarea { min-height: 80px; resize: vertical; }
 input[type='checkbox'] { min-height: auto; }
@@ -151,7 +154,7 @@ input[type='checkbox'] { min-height: auto; }
 .filter-bar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 12px 16px; }
 
 /* Tables */
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; position: relative; }
 table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.data th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 8px 12px; border-bottom: 1px solid var(--hairline-strong); background: var(--surface-sunken); position: sticky; top: 0; white-space: nowrap; }
 table.data td { padding: 8px 12px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
@@ -172,6 +175,8 @@ table.data th.num, table.data td.num { text-align: right; }
 .state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 36px 16px; text-align: center; color: var(--ink-3); }
 .state > span { max-width: 520px; }
 .state strong { color: var(--ink); font-size: 15px; }
+.state h1.state-title { color: var(--ink); font-size: 18px; margin: 0; }
+.row-muted { background: var(--surface-sunken); }
 .state-error { color: var(--bad); }
 .notice { padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px; }
 .notice-warn { background: var(--warn-bg); color: var(--warn); }
@@ -272,3 +277,4 @@ main.content:focus { outline: none; }
 
 /* Budget grid cells that don't parse */
 input.cell-invalid { border-color: var(--bad, #b42318); background: var(--bad-bg); }
+.row-removed td { background: var(--bad-bg); }

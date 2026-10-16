@@ -26,7 +26,7 @@ test('owner dashboard, published statement, owner package and document download'
   await expect(page.locator('table.data th', { hasText: 'Prior year' })).toBeVisible();
 
   // Financial statements: only published/superseded for owners.
-  await page.getByRole('link', { name: 'Budgets & Financials' }).click();
+  await page.getByRole('link', { name: 'Budgets & financials' }).click();
   await expect(page.getByRole('tab', { name: 'Financial statements' })).toBeVisible();
   await expect(page.locator('table.data')).not.toContainText('draft');
   await expect(page.locator('table.data')).not.toContainText('in review');
@@ -34,8 +34,9 @@ test('owner dashboard, published statement, owner package and document download'
   await expect(page.getByText('Net operating income (NOI)')).toBeVisible();
 
   // Owner report.
-  await page.getByRole('link', { name: 'Owner Reports' }).click();
-  await page.getByRole('link', { name: /Owner report/ }).first().click();
+  await page.getByRole('link', { name: 'Owner reports' }).click();
+  // (Scoped to the page: the nav link is now also named "Owner reports".)
+  await page.locator('#main').getByRole('link', { name: /Owner report/ }).first().click();
   await expect(page.getByRole('heading', { name: 'Performance summary' })).toBeVisible();
   await expect(page.getByText('staffing')).toHaveCount(0); // internal note never shown
 

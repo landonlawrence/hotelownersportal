@@ -39,7 +39,7 @@ export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]
           ))}
           {anyPartial && (
             <span className="trend-partial">
-              <svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="#ffffff" stroke="#2a78d6" strokeWidth="1.5" /></svg> partial — not all hotels reported
+              <svg width="10" height="10" aria-hidden><circle cx="5" cy="5" r="3.5" fill="#ffffff" stroke="#2a78d6" strokeWidth="1.5" /></svg> partial — period in progress or not every expected day reported
             </span>
           )}
         </div>
@@ -58,9 +58,9 @@ export function TrendChart({ data, kind, title, currency }: { data: TrendPoint[]
           <ResponsiveContainer>
             <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 4 }}>
               <CartesianGrid stroke="#e1e0d9" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: '#898781', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} minTickGap={16} />
+              <XAxis dataKey="label" tick={{ fill: '#5f6672', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#d1d5db' }} minTickGap={16} />
               <YAxis
-                tick={{ fill: '#898781', fontSize: 11 }}
+                tick={{ fill: '#5f6672', fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 width={64}

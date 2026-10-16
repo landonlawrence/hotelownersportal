@@ -1,5 +1,6 @@
 import {
   buildStatement,
+  commentaryHeading,
   computeKpis,
   formatCurrency,
   formatFraction,
@@ -96,7 +97,8 @@ export interface PackageInput {
     performance_prior_year?: PerfSnap;
     financial_report?: { title: string; revision: number } | null;
     budget_variance?: Array<{ account_id: string; code: string; name: string; nature: Account['nature']; section: string; sort_order: number; actual: number | null; budget: number | null }>;
-    commentary?: Array<{ section: string; title: string | null; body: string }>;
+    commentary?: Array<{ section: string; title: string | null; body: string; account_name?: string | null }>;
+    budget_hidden?: boolean;
     capex?: Array<{ number: string; title: string; status: string; approved_budget: number; actual_spend: number; open_commitments: number; remaining: number; percent_complete: number; latest_update: string | null }>;
     documents?: Array<{ title: string }>;
     definitions?: Record<string, string>;
@@ -109,6 +111,27 @@ const perfKpis = (p?: PerfSnap) =>
     ? computeKpis({ availableRoomNights: Number(p.available_room_nights), roomsSold: Number(p.rooms_sold), roomRevenue: Number(p.room_revenue), totalRevenue: p.total_revenue === null ? null : Number(p.total_revenue) })
     : computeKpis(null);
 
+export const INCOMPLETE_PERIOD_NOTE = 'Comparisons hidden — incomplete period';
+
+/**
+ * KPI tiles of a package (R3-14): vs-PY changes only when the period is complete. When fewer
+ * days were reported than expected (a partial or current month), every comparison is hidden,
+ * as on the dashboard; existing snapshots are handled the same way at render time.
+ */
+export function packageKpiTiles(s: PackageInput['snapshot'], currency: string): Array<{ label: string; value: string; note: string }> {
+  const cur = perfKpis(s.performance);
+  const py = perfKpis(s.performance_prior_year);
+  const partial = !!s.performance && s.performance.reported_days < s.performance.expected_days;
+  const pct = (a: number | null, b: number | null) => formatFraction(kpiDelta(a, b).changePct, 1, true);
+  const note = (text: string) => (partial ? INCOMPLETE_PERIOD_NOTE : text);
+  return [
+    { label: 'Occupancy', value: formatPercent(cur.occupancyPct), note: note(`${formatPoints(kpiDelta(cur.occupancyPct, py.occupancyPct, true).change)} vs PY`) },
+    { label: 'ADR', value: formatCurrency(cur.adr, currency, { cents: true }), note: note(`${pct(cur.adr, py.adr)} vs PY`) },
+    { label: 'RevPAR', value: formatCurrency(cur.revpar, currency, { cents: true }), note: note(`${pct(cur.revpar, py.revpar)} vs PY`) },
+    { label: 'Total revenue', value: formatCurrency(cur.totalRevenue, currency, { compact: true }), note: note(`${pct(cur.totalRevenue, py.totalRevenue)} vs PY`) },
+  ];
+}
+
 export async function renderPackagePdf(i: PackageInput): Promise<Uint8Array> {
   const s = i.snapshot;
   const published = i.status === 'published' || i.status === 'superseded';
@@ -119,35 +142,32 @@ export async function renderPackagePdf(i: PackageInput): Promise<Uint8Array> {
   pdf.space(8);
 
   if (s.performance) {
-    const cur = perfKpis(s.performance);
-    const py = perfKpis(s.performance_prior_year);
     const partial = s.performance.reported_days < s.performance.expected_days;
     pdf.subheading('Performance summary');
     pdf.line(`Provisional daily operating figures · ${s.performance.reported_days} of ${s.performance.expected_days} days reported${partial ? ' (incomplete period)' : ''}`, { size: 8, muted: true });
-    const pct = (a: number | null, b: number | null) => formatFraction(kpiDelta(a, b).changePct, 1, true);
-    pdf.tiles([
-      { label: 'Occupancy', value: formatPercent(cur.occupancyPct), note: `${formatPoints(kpiDelta(cur.occupancyPct, py.occupancyPct, true).change)} vs PY` },
-      { label: 'ADR', value: formatCurrency(cur.adr, i.currency, { cents: true }), note: `${pct(cur.adr, py.adr)} vs PY` },
-      { label: 'RevPAR', value: formatCurrency(cur.revpar, i.currency, { cents: true }), note: `${pct(cur.revpar, py.revpar)} vs PY` },
-      { label: 'Total revenue', value: formatCurrency(cur.totalRevenue, i.currency, { compact: true }), note: partial ? 'partial period' : `${pct(cur.totalRevenue, py.totalRevenue)} vs PY` },
-    ]);
+    pdf.tiles(packageKpiTiles(s, i.currency));
   }
   if (s.commentary?.length) {
     pdf.subheading('Management commentary');
     for (const c of s.commentary) {
-      pdf.line(c.title ?? c.section.replace('_', ' '), { bold: true });
+      pdf.line(commentaryHeading(c), { bold: true });
       pdf.line(c.body);
       pdf.space(4);
     }
     pdf.space(6);
   }
-  if (s.budget_variance?.length) {
-    pdf.subheading(`Budget variances${s.financial_report ? ` (${s.financial_report.title}, revision ${s.financial_report.revision})` : ' (no published statement for this period)'}`);
-    const accounts = s.budget_variance.map((b) => ({ id: b.account_id, code: b.code, name: b.name, nature: b.nature, section: b.section, sort_order: b.sort_order }));
-    const actual = new Map(s.budget_variance.filter((b) => b.actual !== null).map((b) => [b.account_id, Number(b.actual)]));
-    const budget = new Map(s.budget_variance.filter((b) => b.budget !== null).map((b) => [b.account_id, Number(b.budget)]));
-    const { rows, statistics } = buildStatement(accounts, actual, budget, new Map());
-    pdf.table(STATEMENT_COLUMNS(true), statementRows(rows, statistics, i.currency, true));
+  if (s.budget_variance?.length || s.financial_report) {
+    // Viewers with financials.view but not budgets.view get the statement without budget columns (R3-22).
+    const withBudget = !s.budget_hidden;
+    const what = withBudget ? 'Financial statement and budget variances' : 'Financial statement';
+    pdf.subheading(`${what}${s.financial_report ? ` (${s.financial_report.title}, revision ${s.financial_report.revision})` : ' (no published statement for this period)'}`);
+    if (s.budget_variance?.length) {
+      const accounts = s.budget_variance.map((b) => ({ id: b.account_id, code: b.code, name: b.name, nature: b.nature, section: b.section, sort_order: b.sort_order }));
+      const actual = new Map(s.budget_variance.filter((b) => b.actual !== null).map((b) => [b.account_id, Number(b.actual)]));
+      const budget = new Map(s.budget_variance.filter((b) => b.budget !== null && b.budget !== undefined).map((b) => [b.account_id, Number(b.budget)]));
+      const { rows, statistics } = buildStatement(accounts, actual, budget, new Map());
+      pdf.table(STATEMENT_COLUMNS(withBudget), statementRows(rows, statistics, i.currency, withBudget));
+    }
   }
   if (s.capex?.length) {
     pdf.subheading('CapEx update');

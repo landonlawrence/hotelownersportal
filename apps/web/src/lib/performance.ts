@@ -2,21 +2,23 @@ import { useQuery } from '@tanstack/react-query';
 import {
   addDays,
   budgetComponents,
-  comparableRange,
   computeKpis,
   eachDay,
   eachMonth,
   expectedDaysInRange,
+  expectedPropertyIds,
   freshness,
   lastClosedBusinessDate,
-  minIsoDate,
   monthEnd,
   monthStart,
+  periodWindows,
+  portfolioBudgetComponents,
   portfolioSeries,
   priorYearDate,
   priorYearRange,
-  resolvePeriod,
+  priorYearWindow,
   summarizePeriod,
+  trendBucketWindow,
   type BudgetKpiRow,
   type DateRange,
   type Freshness,
@@ -63,11 +65,15 @@ export function defaultAsOf(properties?: ReadonlyArray<Pick<Property, 'timezone'
 
 /** The range a view asks for and the elapsed (comparable) part of it — independent of fetched data. */
 export function requestedRange(view: PeriodView, asOf: IsoDate, properties: ReadonlyArray<Pick<Property, 'timezone'>>, custom?: DateRange) {
-  const range = resolvePeriod(view, asOf, custom);
   // Never expect days that cannot have been reported yet (today or later), and compare an
-  // in-progress period with the same elapsed days of the prior year and budget.
-  const comparable = comparableRange(range, minIsoDate(asOf, defaultAsOf(properties)));
-  return { range, comparable };
+  // in-progress period with the same elapsed days of the prior year and budget. A month view
+  // is the whole month (cut only at the last reportable day), whatever day was picked.
+  return periodWindows(view, asOf, defaultAsOf(properties), custom);
+}
+
+/** The window actuals are fetched (and exported) for: the comparable part, or the whole range before anything elapsed. */
+export function actualsRange(r: { range: DateRange; comparable: DateRange }): DateRange {
+  return r.comparable.to >= r.comparable.from ? { from: r.comparable.from, to: r.comparable.to } : r.range;
 }
 
 export function usePerformance(opts: { companyId: string; properties: Property[]; view: PeriodView; asOf: IsoDate; custom?: DateRange }) {
@@ -86,10 +92,14 @@ export function usePerformance(opts: { companyId: string; properties: Property[]
         trendGrain === 'day'
           ? { from: monthStart(opts.asOf), to: monthEnd(opts.asOf) }
           : { from: monthStart(addDays(monthStart(opts.asOf), -334)), to: monthEnd(opts.asOf) };
-      const trendPrior = priorYearRange(trendRange);
+      const lastReportable = defaultAsOf(opts.properties);
+      const buckets = trendGrain === 'day' ? eachDay(trendRange) : eachMonth(trendRange);
+      // Like-for-like window per bucket: an in-progress month covers its elapsed days only (R3-13).
+      const windows = buckets.map((b) => trendBucketWindow(b, trendGrain, lastReportable));
+      const trendPrior = { from: priorYearDate(trendRange.from), to: priorYearDate(windows[windows.length - 1]!.to) };
 
       const [cur, pri, budgetRows, trendCur, trendPri, fresh, cfg] = await Promise.all([
-        rollup(opts.companyId, range, 'total', ids),
+        rollup(opts.companyId, actualsRange({ range, comparable }), 'total', ids),
         rollup(opts.companyId, priorRange, 'total', ids),
         supabase.rpc('budget_kpi_monthly', { p_company_id: opts.companyId, p_from: trendRange.from < range.from ? trendRange.from : range.from, p_to: trendRange.to > range.to ? trendRange.to : range.to }),
         rollup(opts.companyId, trendRange, trendGrain, ids),
@@ -100,25 +110,29 @@ export function usePerformance(opts: { companyId: string; properties: Property[]
       const budget = ((budgetRows.data ?? []) as BudgetKpiRow[]).filter((b) => ids.includes(b.property_id));
       const current = summarizePeriod(cur, infos, range, comparable.to);
       const prior = summarizePeriod(pri, infos, priorRange, priorRange.to);
-      // Budget totals are only comparable when every selected property has a budget.
+      // Budget totals are only comparable when every property expected to report has a budget;
+      // onboarding/archived properties (not expected) neither block nor add to it (R3-12).
       const budgetedIds = new Set(budget.map((b) => b.property_id));
-      const portfolioBudget = ids.every((id) => budgetedIds.has(id)) ? budgetComponents(budget, comparable) : null;
+      const portfolioBudget = portfolioBudgetComponents(budget, comparable, expectedPropertyIds(infos, comparable, comparable.to));
       const budgetByProperty = new Map(ids.map((id) => [id, budgetedIds.has(id) ? computeKpis(budgetComponents(budget, comparable, [id])) : null]));
 
-      const buckets = trendGrain === 'day' ? eachDay(trendRange) : eachMonth(trendRange);
       const bucketRange = (b: string): DateRange => (trendGrain === 'day' ? { from: b, to: b } : { from: b, to: monthEnd(b) });
-      const lastReportable = defaultAsOf(opts.properties);
       const curSeries = portfolioSeries(trendCur, buckets, (b) => expectedDaysInRange(infos, bucketRange(b), lastReportable));
       const priBuckets = buckets.map((b) => (trendGrain === 'day' ? priorYearDate(b) : `${Number(b.slice(0, 4)) - 1}${b.slice(4)}`));
-      const priSeries = portfolioSeries(trendPri, priBuckets, (b) => expectedDaysInRange(infos, bucketRange(b), lastReportable));
+      const priWindows = new Map(priBuckets.map((b, i) => [b, priorYearWindow(windows[i]!)]));
+      const priSeries = portfolioSeries(trendPri, priBuckets, (b) => expectedDaysInRange(infos, priWindows.get(b)!, priWindows.get(b)!.to));
       const trend = buckets.map((b, i) => {
         const isFuture = b > opts.asOf;
+        const w = windows[i]!;
         return {
           label: trendGrain === 'day' ? String(Number(b.slice(8))) : new Intl.DateTimeFormat('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }).format(new Date(`${b}T12:00:00Z`)),
           current: isFuture ? null : curSeries[i]!.components ? computeKpis(curSeries[i]!.components) : null,
           prior: priSeries[i]!.components ? computeKpis(priSeries[i]!.components) : null,
-          budget: ids.every((id) => budgetedIds.has(id)) ? computeKpis(budgetComponents(budget, bucketRange(b))) : null,
-          partial: !isFuture && curSeries[i]!.components !== null && curSeries[i]!.partial,
+          budget: (() => {
+            const c = portfolioBudgetComponents(budget, w, expectedPropertyIds(infos, w, w.to));
+            return c ? computeKpis(c) : null;
+          })(),
+          partial: !isFuture && curSeries[i]!.components !== null && (curSeries[i]!.partial || w.inProgress),
           priorPartial: priSeries[i]!.components !== null && priSeries[i]!.partial,
         };
       });

@@ -33,14 +33,15 @@ export function PropertyMultiSelect({ properties, selected, onChange }: { proper
   };
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <label className="field">
-        Properties
-        <button ref={trigger} type="button" className="btn" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((o) => !o)} style={{ minWidth: 220, justifyContent: 'space-between' }}>
+      {/* A caption, not a <label>: the button is named "Properties: <selection>" (R3-29). */}
+      <div className="field">
+        <span aria-hidden>Properties</span>
+        <button ref={trigger} type="button" className="btn" aria-label={`Properties: ${label}`} aria-expanded={open} aria-controls="property-filter-popup" onClick={() => setOpen((o) => !o)} style={{ minWidth: 220, justifyContent: 'space-between' }}>
           {label} <span aria-hidden>▾</span>
         </button>
-      </label>
+      </div>
       {open && (
-        <div className="card" role="listbox" aria-multiselectable style={{ position: 'absolute', zIndex: 10, top: '100%', marginTop: 4, minWidth: 280, padding: 8 }}>
+        <div className="card" id="property-filter-popup" role="group" aria-label="Choose properties" style={{ position: 'absolute', zIndex: 10, top: '100%', marginTop: 4, minWidth: 280, padding: 8 }}>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange([])}>Select all</button>
           {properties.map((p) => {
             const checked = selected.length === 0 || selected.includes(p.id);
@@ -76,10 +77,10 @@ export function localYesterday(): string {
 export function PeriodFilter({ view, asOf, onView, onAsOf, max }: { view: PeriodView; asOf: string; onView: (v: PeriodView) => void; onAsOf: (d: string) => void; max?: string }) {
   return (
     <>
-      <label className="field">
-        Period
+      <div className="field">
+        <span aria-hidden>Period</span>
         <Segmented label="Period" value={view} onChange={onView} options={VIEW_OPTIONS} />
-      </label>
+      </div>
       <label className="field">
         {view === 'month' ? 'Month of' : 'As of business date'}
         <input type="date" value={asOf} max={max ?? localYesterday()} onChange={(e) => e.target.value && onAsOf(e.target.value)} />

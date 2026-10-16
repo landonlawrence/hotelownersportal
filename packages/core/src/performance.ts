@@ -3,7 +3,7 @@
  * into KPI results. Used by the web app, CSV exports and reporting packages so
  * every surface computes identical numbers.
  */
-import { addDays, daysInclusive, minIsoDate, type DateRange, type IsoDate } from './dates.js';
+import { addDays, daysInclusive, minIsoDate, monthEnd, priorYearDate, resolvePeriod, type DateRange, type IsoDate, type PeriodView } from './dates.js';
 import { expectedDaysForProperty, portfolioRollup, type KpiComponents, type PortfolioResult, type PropertyPeriodSums } from './kpi.js';
 
 export interface RollupRow {
@@ -74,6 +74,56 @@ export function comparableRange(range: DateRange, asOf: IsoDate): DateRange & { 
   const to = minIsoDate(range.to, asOf);
   if (to < range.from) return { from: range.from, to: addDays(range.from, -1), inProgress: true };
   return { from: range.from, to, inProgress: to < range.to };
+}
+
+/**
+ * The range a period view asks for and its like-for-like (comparable) part (R3-03).
+ * `lastReportable` is the latest business date that can have been reported. A month view
+ * always covers the whole month, whatever day was picked: it is cut only at `lastReportable`,
+ * so a closed month is compared in full and the current month over its elapsed days.
+ */
+export function periodWindows(view: PeriodView, asOf: IsoDate, lastReportable: IsoDate, custom?: DateRange) {
+  const range = resolvePeriod(view, asOf, custom);
+  const cutoff = view === 'month' ? lastReportable : minIsoDate(asOf, lastReportable);
+  return { range, comparable: comparableRange(range, cutoff) };
+}
+
+/**
+ * Properties expected to report in `range` up to `asOf` (R3-12): operating (not onboarding or
+ * archived) and open for at least one day of it.
+ */
+export function expectedPropertyIds(properties: PropertyInfo[], range: DateRange, asOf: IsoDate): string[] {
+  return properties
+    .filter((p) => !NOT_EXPECTED.has(p.status ?? '') && expectedDaysForProperty(range, { openedOn: p.openedOn ?? null, asOf }) > 0)
+    .map((p) => p.id);
+}
+
+/**
+ * Portfolio budget for a range: only comparable when every property expected to report has a
+ * budget, and summed over exactly those properties (R3-12).
+ */
+export function portfolioBudgetComponents(rows: BudgetKpiRow[], range: DateRange, expectedIds: string[]): KpiComponents | null {
+  if (expectedIds.length === 0) return null;
+  const budgeted = new Set(rows.map((r) => r.property_id));
+  if (!expectedIds.every((id) => budgeted.has(id))) return null;
+  return budgetComponents(rows, range, expectedIds);
+}
+
+/**
+ * The like-for-like window of one trend bucket (R3-13). A month bucket that is in progress is cut
+ * to its elapsed days, so prior year and budget cover the same days as the actuals. Day buckets and
+ * months that have not started are returned whole.
+ */
+export function trendBucketWindow(bucket: IsoDate, grain: 'day' | 'month', lastReportable: IsoDate): DateRange & { inProgress: boolean } {
+  const full: DateRange = grain === 'day' ? { from: bucket, to: bucket } : { from: bucket, to: monthEnd(bucket) };
+  if (grain === 'day') return { ...full, inProgress: false };
+  const c = comparableRange(full, lastReportable);
+  return c.to < c.from ? { ...full, inProgress: false } : c;
+}
+
+/** The same window one year earlier (29 Feb maps to 28 Feb). */
+export function priorYearWindow(range: DateRange): DateRange {
+  return { from: priorYearDate(range.from), to: priorYearDate(range.to) };
 }
 
 /** Property-days expected in a bucket (operating properties only, never beyond `asOf`). */

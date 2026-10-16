@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase, unwrap } from '../lib/supabase';
@@ -27,7 +27,7 @@ export function FinancialsPage() {
   if (visible.length === 0) return <Empty title="No financial access">Your access does not include financial information.</Empty>;
   return (
     <div className="stack">
-      <PageHeader title="Budgets & Financials" subtitle="Published accounting figures. Uploading a PDF does not change structured data — figures come from validated imports." />
+      <PageHeader title="Budgets & financials" subtitle="Published accounting figures. Uploading a PDF does not change structured data — figures come from validated imports." />
       <MfaLockedNotice perms={['financials.view_draft', 'financials.edit', 'financials.publish', 'budgets.edit', 'budgets.approve']}>
         Some data and actions need a 2FA-verified session: draft statements, new statements and budgets, approvals and account mappings.
       </MfaLockedNotice>
@@ -127,7 +127,7 @@ function NewStatement({ onClose, canEdit }: { onClose: () => void; canEdit: (id:
   };
   return (
     <Modal title="New financial statement" onClose={onClose}>
-      <p className="muted">Creates an empty draft for manual entry. Use Data Imports for standardized spreadsheet actuals.</p>
+      <p className="muted">Creates an empty draft for manual entry. Use Data imports for standardized spreadsheet actuals.</p>
       {create.error && <Notice tone="bad">{errorMessage(create.error)}</Notice>}
       <label className="field">Property<select value={pid} onChange={(e) => setPid(e.target.value)}>{eligible.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
       <label className="field">Period<input type="month" max={maxMonth} value={month} onChange={(e) => setMonth(e.target.value)} />{monthError && <span className="field-error">{monthError}</span>}</label>
@@ -140,16 +140,34 @@ function VarianceView() {
   const { properties } = usePortal();
   const company = useCompany();
   const accounts = useAccounts(company.company_id);
-  const [propertyId, setPropertyId] = useState(properties[0]?.id ?? '');
-  // Two months back (the latest month normally published), from the local calendar so every viewer gets the same month.
-  const lastMonth = useMemo(() => lastClosedMonthValue(2), []);
-  const [month, setMonth] = useState(lastMonth);
+  // Open on a reporting hotel (not onboarding/archived) and its latest published statement (R3-38).
+  const [propertyId, setPropertyId] = useState(
+    () => (properties.find((p) => p.status === 'active') ?? properties.find((p) => !['onboarding', 'archived'].includes(p.status)) ?? properties[0])?.id ?? '',
+  );
+  // Fallback: the last closed month, from the local calendar so every viewer gets the same month.
+  const lastMonth = useMemo(() => lastClosedMonthValue(1), []);
+  const [month, setMonthState] = useState(lastMonth);
+  const [monthChosen, setMonthChosen] = useState(false);
+  const setMonth = (m: string) => {
+    setMonthChosen(true);
+    setMonthState(m);
+  };
+  const latestPublished = useQuery({
+    queryKey: ['latest-published-pnl', propertyId],
+    enabled: !!propertyId && !monthChosen,
+    queryFn: async () =>
+      (unwrap(await supabase.from('financial_reports').select('period_month').eq('property_id', propertyId).eq('report_type', 'monthly_pnl').eq('status', 'published').order('period_month', { ascending: false }).limit(1)) as Array<{ period_month: string }>)[0]?.period_month ?? null,
+  });
+  useEffect(() => {
+    if (!monthChosen && latestPublished.data) setMonthState(latestPublished.data.slice(0, 7));
+  }, [latestPublished.data, monthChosen]);
   const [ytd, setYtd] = useState(false);
   const qc = useQueryClient();
   const [commentFor, setCommentFor] = useState<{ accountId: string; label: string } | null>(null);
   const [editing, setEditing] = useState<{ id: string; body: string; visibility: string } | null>(null);
   const [commentErr, setCommentErr] = useState<string | null>(null);
-  const { can, ctx } = usePortal();
+  const { can } = usePortal();
+  const accountLabel = (id: string | null) => accounts.data?.find((a) => a.id === id)?.name ?? 'General';
   const commentAction = async (fn: () => PromiseLike<{ error: { message: string; code?: string } | null }>) => {
     setCommentErr(null);
     const { error } = await fn();
@@ -224,14 +242,15 @@ function VarianceView() {
                   <li key={c.id}>
                     <div className="spread">
                       <span>
-                        <strong>{accounts.data?.find((a) => a.id === c.account_id)?.name ?? 'General'}</strong>{' '}
+                        <strong>{accountLabel(c.account_id)}</strong>{' '}
                         {c.visibility === 'internal' && <StatusBadge status="draft" label="internal" />} {c.status === 'draft' && <StatusBadge status="draft" />}
                       </span>
                       {can('commentary.edit', propertyId) && c.status === 'draft' && (
                         <span className="row" style={{ gap: 4 }}>
-                          <button className="btn btn-sm" onClick={() => setEditing(c)}>Edit</button>
-                          <button className="btn btn-sm" onClick={() => void commentAction(() => supabase.from('management_commentary').update({ status: 'published', published_by: ctx?.user_id, published_at: new Date().toISOString() }).eq('id', c.id))}>Publish</button>
-                          <button className="btn btn-sm btn-ghost" onClick={() => confirmAction('Delete this draft comment?') && void commentAction(() => supabase.from('management_commentary').delete().eq('id', c.id))}>Delete</button>
+                          <button className="btn btn-sm" aria-label={`Edit comment on ${accountLabel(c.account_id)}`} onClick={() => setEditing(c)}>Edit</button>
+                          {/* Author and publication time are set by the database. */}
+                          <button className="btn btn-sm" aria-label={`Publish comment on ${accountLabel(c.account_id)}`} onClick={() => void commentAction(() => supabase.from('management_commentary').update({ status: 'published' }).eq('id', c.id))}>Publish</button>
+                          <button className="btn btn-sm btn-ghost" aria-label={`Delete comment on ${accountLabel(c.account_id)}`} onClick={() => confirmAction('Delete this draft comment?') && void commentAction(() => supabase.from('management_commentary').delete().eq('id', c.id))}>Delete</button>
                         </span>
                       )}
                     </div>
@@ -249,7 +268,7 @@ function VarianceView() {
           initial={{ body: editing.body, visibility: editing.visibility as 'owner' | 'internal' }}
           onClose={() => setEditing(null)}
           onSave={async (body, visibility, publish) => {
-            unwrap(await supabase.from('management_commentary').update({ body, visibility, ...(publish ? { status: 'published', published_by: ctx?.user_id, published_at: new Date().toISOString() } : {}) }).eq('id', editing.id).select('id'));
+            unwrap(await supabase.from('management_commentary').update({ body, visibility, ...(publish ? { status: 'published' } : {}) }).eq('id', editing.id).select('id'));
             await qc.invalidateQueries({ queryKey: ['variance'] });
             setEditing(null);
           }}
@@ -260,7 +279,7 @@ function VarianceView() {
           title={`Variance comment — ${commentFor.label}`}
           onClose={() => setCommentFor(null)}
           onSave={async (body, visibility, publish) => {
-            unwrap(await supabase.from('management_commentary').insert({ company_id: company.company_id, property_id: propertyId, period_month: `${month}-01`, section: 'variance', account_id: commentFor.accountId, body, visibility, status: publish ? 'published' : 'draft', created_by: ctx?.user_id, published_by: publish ? ctx?.user_id : null, published_at: publish ? new Date().toISOString() : null }).select('id'));
+            unwrap(await supabase.from('management_commentary').insert({ company_id: company.company_id, property_id: propertyId, period_month: `${month}-01`, section: 'variance', account_id: commentFor.accountId, body, visibility, status: publish ? 'published' : 'draft' }).select('id'));
             await qc.invalidateQueries({ queryKey: ['variance'] });
             setCommentFor(null);
           }}
@@ -364,6 +383,8 @@ function NewBudget({ onClose, existing }: { onClose: () => void; existing: Array
   );
 }
 
+const NO_MAPPING_ACCESS = 'You can’t change this mapping: company-wide mappings need access to every property, and property mappings need financial edit access to that property.';
+
 function Mappings() {
   const company = useCompany();
   const { properties } = usePortal();
@@ -391,21 +412,23 @@ function Mappings() {
   const saveEdit = async () => {
     if (!editing) return;
     setErr(null);
-    const { error } = await supabase.from('source_account_mappings').update({ account_id: editing.account }).eq('id', editing.id);
+    const { data, error } = await supabase.from('source_account_mappings').update({ account_id: editing.account }).eq('id', editing.id).select('id');
     if (error) setErr(dbErrorMessage(error));
+    else if (!data || data.length === 0) setErr(NO_MAPPING_ACCESS);
     else setEditing(null);
     await refresh();
   };
   const remove = async (id: string, code: string) => {
     if (!confirmAction(`Delete the mapping for ${code}? Future imports with this code will be rejected until it is mapped again.`)) return;
     setErr(null);
-    const { error } = await supabase.from('source_account_mappings').delete().eq('id', id);
+    const { data, error } = await supabase.from('source_account_mappings').delete().eq('id', id).select('id');
     if (error) setErr(dbErrorMessage(error));
+    else if (!data || data.length === 0) setErr(NO_MAPPING_ACCESS);
     await refresh();
   };
   return (
     <Card title="Source account mappings" flush>
-      <p className="small muted" style={{ padding: '0 16px' }}>Imported GL accounts are mapped to the company reporting structure. Original account codes and values are preserved on every line. Property-specific mappings override company defaults. Changing a mapping affects future imports only.</p>
+      <p className="small muted" style={{ padding: '0 16px' }}>Imported GL accounts are mapped to the company reporting structure. Original account codes and values are preserved on every line. Property-specific mappings override company defaults. Monthly actuals may also use reporting account codes directly (e.g. REV_ROOMS) when no mapping exists. Changing a mapping affects future imports only.</p>
       <div className="filter-bar" style={{ margin: '0 16px' }}>
         <label className="field">Source code<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} /></label>
         <label className="field">Source name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
@@ -441,8 +464,8 @@ function Mappings() {
                       </>
                     ) : (
                       <>
-                        <button className="btn btn-sm" onClick={() => setEditing({ id: m.id, account: m.account_id })}>Edit</button>
-                        <button className="btn btn-sm btn-ghost" onClick={() => void remove(m.id, m.source_account_code)}>Delete</button>
+                        <button className="btn btn-sm" aria-label={`Edit mapping ${m.source_account_code}`} onClick={() => setEditing({ id: m.id, account: m.account_id })}>Edit</button>
+                        <button className="btn btn-sm btn-ghost" aria-label={`Delete mapping ${m.source_account_code}`} onClick={() => void remove(m.id, m.source_account_code)}>Delete</button>
                       </>
                     )}
                   </td>

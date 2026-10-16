@@ -37,7 +37,7 @@ export function IngestionSourcesCard() {
                   <td>{s.revision_policy === 'replace' ? 'Replace (history kept)' : 'Require review'}</td>
                   <td>{s.expected_cadence === 'daily' ? `Daily by ${s.expected_by_local?.slice(0, 5) ?? '11:00'} local` : s.expected_cadence === 'monthly' ? `Monthly by day ${s.expected_by_day ?? 15}` : '—'}</td>
                   <td><StatusBadge status={s.active ? 'active' : 'cancelled'} label={s.active ? 'active' : 'paused'} /></td>
-                  <td>{manage && <button className="btn btn-sm" onClick={() => setOpen(s.id)}>Configure</button>}</td>
+                  <td>{manage && <button className="btn btn-sm" aria-label={`Configure ${s.name}`} onClick={() => setOpen(s.id)}>Configure</button>}</td>
                 </tr>
               ))}
             </tbody>
@@ -124,19 +124,31 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
     return !error;
   };
   const senders = route.data?.allowed_senders ?? [];
+  /** Atomic sender change on the server (no read-modify-write of a cached list); shows the server's list. */
+  const changeSender = async (fn: 'add_allowed_sender' | 'remove_allowed_sender', value: string): Promise<boolean> => {
+    setErr(null);
+    const { data, error } = await supabase.rpc(fn, { p_source_id: source.id, p_sender: value });
+    if (error) {
+      setErr(dbErrorMessage(error));
+      return false;
+    }
+    qc.setQueryData(['route', source.id], (prev: typeof route.data) => (prev ? { ...prev, allowed_senders: data as string[] } : prev));
+    return true;
+  };
   // One address, or a whole domain written as @domain; labels can't start or end with a dash.
   const label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
   const validSender = new RegExp(`^(?:@|[a-z0-9._%+-]+@)(?:${label}\\.)+[a-z]{2,}$`, 'i').test(sender.trim());
   const normalisedCode = map.code.trim().toUpperCase();
   return (
-    <Modal title={`Configure: ${source.name}`} onClose={onClose}>
+    // Everything here saves instantly; only text typed but not yet added is worth asking about.
+    <Modal title={`Configure: ${source.name}`} onClose={onClose} confirmDiscard={!!sender.trim() || !!map.code.trim()}>
       {err && <Notice tone="bad">{err}</Notice>}
       {source.channel === 'email' && mappings.data && mappings.data.length === 0 && (
         <Notice tone="warn">Emails to this source will be rejected until you map property codes below.</Notice>
       )}
       <div className="row">
-        <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={source.active} onChange={(e) => void run(supabase.from('ingestion_sources').update({ active: e.target.checked }).eq('id', source.id))} /> Active</label>
-        <select aria-label="Revision policy" value={source.revision_policy} onChange={(e) => void run(supabase.from('ingestion_sources').update({ revision_policy: e.target.value }).eq('id', source.id))}>
+        <label className="row small" style={{ gap: 6 }}><input type="checkbox" data-no-dirty checked={source.active} onChange={(e) => void run(supabase.from('ingestion_sources').update({ active: e.target.checked }).eq('id', source.id))} /> Active</label>
+        <select aria-label="Revision policy" data-no-dirty value={source.revision_policy} onChange={(e) => void run(supabase.from('ingestion_sources').update({ revision_policy: e.target.value }).eq('id', source.id))}>
           <option value="require_review">Hold revisions for review</option><option value="replace">Replace revisions automatically</option>
         </select>
       </div>
@@ -151,16 +163,16 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
                 <span className="small muted">Allowed senders (an email must match one of these and pass SPF or DKIM)</span>
                 <ul className="timeline">
                   {senders.map((s) => (
-                    <li key={s} className="spread"><code>{s}</code><button className="btn btn-sm btn-danger" onClick={() => void run(supabase.from('ingestion_source_routes').update({ allowed_senders: senders.filter((x) => x !== s) }).eq('source_id', source.id))}>Remove</button></li>
+                    <li key={s} className="spread"><code>{s}</code><button className="btn btn-sm btn-danger" aria-label={`Remove sender ${s}`} onClick={() => void changeSender('remove_allowed_sender', s)}>Remove</button></li>
                   ))}
                   {senders.length === 0 && <li className="muted">No senders allowed — all email to this address is rejected.</li>}
                 </ul>
                 <div className="row">
                   <input aria-label="Allowed sender" placeholder="nightaudit@hotel.com or @pms.vendor.com" value={sender} onChange={(e) => setSender(e.target.value)} />
-                  <button className="btn btn-sm" disabled={!validSender} onClick={() => void run(supabase.from('ingestion_source_routes').update({ allowed_senders: [...new Set([...senders, sender.trim().toLowerCase()])] }).eq('source_id', source.id)).then((ok) => ok && setSender(''))}>Add sender</button>
+                  <button className="btn btn-sm" disabled={!validSender} onClick={() => void changeSender('add_allowed_sender', sender).then((ok) => ok && setSender(''))}>Add sender</button>
                 </div>
               </div>
-              <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={route.data.require_spf_dkim_pass} onChange={(e) => void run(supabase.from('ingestion_source_routes').update({ require_spf_dkim_pass: e.target.checked }).eq('source_id', source.id))} /> Require SPF or DKIM pass (recommended)</label>
+              <label className="row small" style={{ gap: 6 }}><input type="checkbox" data-no-dirty checked={route.data.require_spf_dkim_pass} onChange={(e) => void run(supabase.from('ingestion_source_routes').update({ require_spf_dkim_pass: e.target.checked }).eq('source_id', source.id))} /> Require SPF or DKIM pass (recommended)</label>
             </div>
           ) : <button className="btn btn-sm" onClick={() => void run(supabase.rpc('rotate_ingestion_route_token', { p_source_id: source.id }))}>Create inbound address</button>}
         </>
@@ -170,7 +182,7 @@ function SourceConfig({ source, onClose }: { source: Source; onClose: () => void
       <table className="data">
         <tbody>
           {(mappings.data ?? []).map((m) => (
-            <tr key={m.id}><td><code>{m.external_code}</code></td><td>{properties.find((p) => p.id === m.property_id)?.name ?? '—'}</td><td><button className="btn btn-sm btn-danger" onClick={() => void run(supabase.from('ingestion_property_mappings').delete().eq('id', m.id))}>Remove</button></td></tr>
+            <tr key={m.id}><td><code>{m.external_code}</code></td><td>{properties.find((p) => p.id === m.property_id)?.name ?? '—'}</td><td><button className="btn btn-sm btn-danger" aria-label={`Remove mapping ${m.external_code}`} onClick={() => void run(supabase.from('ingestion_property_mappings').delete().eq('id', m.id))}>Remove</button></td></tr>
           ))}
         </tbody>
       </table>

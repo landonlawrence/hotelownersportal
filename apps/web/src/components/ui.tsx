@@ -1,12 +1,59 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { DbError } from '../lib/supabase';
 import { ApiError } from '../lib/api';
+import { setPageTitle } from '../lib/tenant';
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
+/**
+ * Focus after route changes (WCAG 2.4.3): the layout asks for the next page-level h1 to take
+ * focus; the heading takes it as it mounts, so a late timer can never steal focus from a
+ * control the user has already moved to.
+ */
+let headingSeq = 0;
+let latestHeading: HTMLElement | null = null;
+let pendingSince: number | null = null;
+export function requestHeadingFocus(since: number): () => void {
+  if (headingSeq > since && latestHeading?.isConnected) {
+    latestHeading.focus({ preventScroll: true });
+    return () => undefined;
+  }
+  pendingSince = since;
+  const t = setTimeout(() => {
+    if (pendingSince === since) pendingSince = null;
+  }, 5000);
+  return () => {
+    clearTimeout(t);
+    if (pendingSince === since) pendingSince = null;
+  };
+}
+export function pageHeadingSeq() {
+  return headingSeq;
+}
+function useRegisterPageHeading(enabled: boolean) {
+  const ref = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (enabled && ref.current) {
+      headingSeq += 1;
+      latestHeading = ref.current;
+      if (pendingSince !== null && headingSeq > pendingSince) {
+        pendingSince = null;
+        ref.current.focus({ preventScroll: true });
+      }
+    }
+  }, [enabled]);
+  return ref;
+}
+
+/** Page heading; also sets the document title. `as="h2"` for a heading nested under another page's h1. */
+export function PageHeader({ title, subtitle, actions, as = 'h1' }: { title: string; subtitle?: ReactNode; actions?: ReactNode; as?: 'h1' | 'h2' }) {
+  useEffect(() => {
+    if (as === 'h1') setPageTitle(title);
+  }, [title, as]);
+  const H = as;
+  const ref = useRegisterPageHeading(as === 'h1');
   return (
     <div className="page-header">
       <div>
-        <h1>{title}</h1>
+        <H tabIndex={-1} ref={ref}>{title}</H>
         {subtitle && <p>{subtitle}</p>}
       </div>
       {actions && <div className="row">{actions}</div>}
@@ -36,10 +83,15 @@ export function Loading({ label = 'Loading…' }: { label?: string }) {
   );
 }
 
-export function Empty({ title, children }: { title: string; children?: ReactNode }) {
+/** Empty or blocked state. `page` renders the title as the page's h1 (a page-level state). */
+export function Empty({ title, children, page }: { title: string; children?: ReactNode; page?: boolean }) {
+  useEffect(() => {
+    if (page) setPageTitle(title);
+  }, [page, title]);
+  const ref = useRegisterPageHeading(!!page);
   return (
     <div className="state">
-      <strong>{title}</strong>
+      {page ? <h1 className="state-title" tabIndex={-1} ref={ref}>{title}</h1> : <strong>{title}</strong>}
       {children && <span>{children}</span>}
     </div>
   );
@@ -82,6 +134,11 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   support_access_sessions_ticket_ref_check: 'Enter a ticket reference.',
 };
 
+/** Server messages (RPC exceptions) worded for people. */
+const MESSAGE_MAP: Array<[RegExp, string]> = [
+  [/^budget has no lines$/i, 'Enter and save at least one budget line before approving.'],
+];
+
 const GENERIC_BY_CODE: Record<string, string> = {
   '23505': 'That already exists.',
   '23514': 'Some values are out of range or in the wrong format.',
@@ -116,6 +173,7 @@ export function errorMessage(e: unknown): string {
 }
 
 function friendlyText(msg: string): string {
+  for (const [re, text] of MESSAGE_MAP) if (re.test(msg)) return text;
   // zod-style "field: problem" messages from the API.
   if (/(^|; )email: Invalid email/i.test(msg)) return 'Enter a valid email address.';
   if (/^permission denied: /i.test(msg)) return 'You don’t have permission to do that.';
@@ -191,20 +249,32 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+const ModalContext = createContext<{ markClean: () => void }>({ markClean: () => undefined });
+
+/** Inside a Modal: `markClean()` after a successful save so closing does not ask to discard. */
+export function useModal() {
+  return useContext(ModalContext);
+}
+
 /**
  * Accessible dialog: focuses the first field, traps Tab, closes on Escape,
  * restores focus on close, and asks before discarding typed input when the
- * backdrop is clicked or Escape is pressed.
+ * backdrop is clicked or Escape is pressed. Controls that save instantly carry
+ * `data-no-dirty` (they never count as unsaved input); `confirmDiscard={false}`
+ * turns the question off for dialogs with nothing to lose.
  */
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, confirmDiscard = true }: { title: string; onClose: () => void; children: ReactNode; confirmDiscard?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const dirty = useRef(false);
+  const confirmRef = useRef(confirmDiscard);
+  confirmRef.current = confirmDiscard;
   const requestClose = useRef(() => {
-    if (dirty.current && !window.confirm('Discard what you entered?')) return;
+    if (confirmRef.current && dirty.current && !window.confirm('Discard what you entered?')) return;
     closeRef.current();
   });
+  const ctx = useRef({ markClean: () => { dirty.current = false; } });
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const el = ref.current;
@@ -248,7 +318,8 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
         aria-label={title}
         tabIndex={-1}
         onKeyDown={trap}
-        onInput={() => {
+        onInput={(e) => {
+          if ((e.target as HTMLElement).closest?.('[data-no-dirty]')) return;
           dirty.current = true;
         }}
       >
@@ -258,7 +329,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
             ✕
           </button>
         </div>
-        {children}
+        <ModalContext.Provider value={ctx.current}>{children}</ModalContext.Provider>
       </div>
     </div>
   );

@@ -12,7 +12,7 @@
  */
 import { normaliseDay, DEFAULT_REPORTING_CONFIG, computeKpis } from '../kpi.js';
 import { checkColumns, parseDateCell, readNumber, RowReader } from './common.js';
-import type { ParseResult, ReportParser, Table, ParseContext, ValidationIssue } from './types.js';
+import type { ParseResult, PropertyRef, ReportParser, Table, ParseContext, ValidationIssue } from './types.js';
 
 export interface DailyPerformanceImportRecord {
   propertyId: string;
@@ -43,6 +43,14 @@ const OPTIONAL = [
   'source_revpar',
 ];
 const RECONCILE_TOLERANCE = 1; // currency units
+
+/** R3-04: say where inventory starts and where to add earlier inventory. */
+export function unknownInventoryMessage(property: Pick<PropertyRef, 'code' | 'inventoryStart'>, businessDate: string): string {
+  const where = 'add earlier inventory under Administration > Properties > Room inventory, or include a rooms_available column';
+  return property.inventoryStart
+    ? `No room inventory covers ${businessDate} for ${property.code} (inventory starts ${property.inventoryStart}); ${where}`
+    : `No room inventory is configured for ${property.code} on ${businessDate}; ${where.replace('earlier ', '')}`;
+}
 
 export function parseDailyPerformance(table: Table, ctx: ParseContext): ParseResult<DailyPerformanceImportRecord> {
   const issues: ValidationIssue[] = [];
@@ -110,7 +118,7 @@ export function parseDailyPerformance(table: Table, ctx: ParseContext): ParseRes
     const inventory = property.roomsOn?.(businessDate) ?? null;
     const physical = roomsAvail ?? inventory;
     if (physical === null) {
-      issues.push({ severity: 'error', row: rowNo, field: 'rooms_available', code: 'unknown_inventory', message: `No rooms_available supplied and no room inventory configured for ${property.code} on ${businessDate}` });
+      issues.push({ severity: 'error', row: rowNo, field: 'rooms_available', code: 'unknown_inventory', message: unknownInventoryMessage(property, businessDate) });
       return;
     }
     if (roomsAvail !== null && inventory !== null && roomsAvail !== inventory) {

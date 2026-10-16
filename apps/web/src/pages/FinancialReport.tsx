@@ -10,6 +10,7 @@ import { DownloadButton } from '../components/DownloadButton';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, confirmAction, dbErrorMessage, errorMessage, fmtDate, fmtMonth, parseAmount } from '../components/ui';
 import { StatementTable } from '../components/StatementTable';
+import { OtherCompanyNotice } from '../components/OtherCompanyNotice';
 
 interface Report {
   id: string;
@@ -79,7 +80,8 @@ export function FinancialReportPage() {
 
   if (report.isLoading) return <Loading />;
   if (report.error) return <ErrorState error={report.error} />;
-  if (!r) return <Empty title="Statement not found">It may not exist, may not be published yet, or you may not have access.</Empty>;
+  if (!r) return <Empty page title="Statement not found">It may not exist, may not be published yet, or you may not have access.</Empty>;
+  if (r.company_id !== company.company_id) return <OtherCompanyNotice companyId={r.company_id} propertyId={r.property_id} fallbackName={r.title} />;
   const property = properties.find((p) => p.id === r.property_id);
   const canEdit = can('financials.edit', r.property_id);
   const canPublish = can('financials.publish', r.property_id);
@@ -90,7 +92,7 @@ export function FinancialReportPage() {
 
   return (
     <div className="stack">
-      <div className="small"><Link to="/financials">← Budgets & Financials</Link></div>
+      <div className="small"><Link to="/financials">← Budgets & financials</Link></div>
       <PageHeader
         title={`${property?.name ?? ''} — ${fmtMonth(r.period_month)}`}
         subtitle={<>{r.title} · revision {r.revision} · <StatusBadge status={r.status} label={r.status === 'in_review' ? 'in review' : undefined} />{r.published_at && ` · published ${fmtDate(r.published_at)}`}</>}

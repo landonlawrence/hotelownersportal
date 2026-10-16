@@ -27,7 +27,7 @@ test.describe('owner authorized for two hotels cannot reach a third (UI)', () =>
 
     // Property picker never offers the third hotel.
     await page.goto('/');
-    await page.locator('button[aria-haspopup="listbox"]').click();
-    await expect(page.getByRole('listbox')).not.toContainText('Embarcadero');
+    await page.getByRole('button', { name: /^Properties: / }).click();
+    await expect(page.getByRole('group', { name: 'Choose properties' })).not.toContainText('Embarcadero');
   });
 });

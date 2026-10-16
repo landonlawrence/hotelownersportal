@@ -31,7 +31,7 @@ test('company admin adds a property with opening inventory and changes its room 
 
 test('ingestion manager adds an allowed sender and a property mapping', async ({ page }) => {
   await login(page, 'finance@harborview.example');
-  await page.getByRole('link', { name: 'Data Imports' }).click();
+  await page.getByRole('link', { name: 'Data imports' }).click();
   await page.getByRole('row', { name: /Nightly PMS flash/ }).getByRole('button', { name: 'Configure' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText(/reports\+[a-z0-9]+@inbound\.portal\.example/)).toBeVisible();
@@ -48,7 +48,7 @@ test('ingestion manager adds an allowed sender and a property mapping', async ({
 
 test('owner downloads a branded statement PDF and turns off an email notification', async ({ page }) => {
   await login(page, 'olivia.owner@owners.example');
-  await page.getByRole('link', { name: 'Budgets & Financials' }).click();
+  await page.getByRole('link', { name: 'Budgets & financials' }).click();
   await page.getByRole('link', { name: 'P&L — July 2026' }).first().click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download PDF' }).click()]);
   expect(download.suggestedFilename()).toMatch(/\.pdf$/);

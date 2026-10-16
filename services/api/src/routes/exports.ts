@@ -2,11 +2,12 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import {
   addDays,
+  buildStatement,
   computeKpis,
   localToday,
   minIsoDate,
-  formatNumber,
   isIsoDate,
+  statementCsvRows,
   rowToComponents,
   summarizePeriod,
   toCsv,
@@ -125,6 +126,21 @@ exportsRoute.get('/performance.csv', async (c) => {
     if (grain === 'total') row.push(propertyCoverage(p));
     out.push(row);
   }
+  // Every selected property gets a line, so the footer count matches the rows (R3-28).
+  if (grain === 'total') {
+    const reported = new Set(rollup.map((r) => r.property_id));
+    const missing = properties.filter((p) => !reported.has(p.id));
+    for (const p of missing) {
+      const coverage = p.status === 'onboarding' || p.status === 'archived' ? `not expected (${p.status})` : propertyCoverage(p);
+      out.push([p.code, p.name, `${from}..${to}`, '', '', '', '', '', '', '', 0, coverage]);
+    }
+    if (missing.length > 0) {
+      const header = out.slice(0, 5);
+      const body = out.slice(5).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+      out.length = 0;
+      out.push(...header, ...body);
+    }
+  }
   if (grain === 'total' && properties.length > 1) {
     const yesterday = properties.reduce((acc, p) => (addDays(localToday(p.timezone), -1) > acc ? addDays(localToday(p.timezone), -1) : acc), '0000-01-01');
     const s = summarizePeriod(rollup, properties.map((p) => ({ id: p.id, openedOn: p.opened_on, status: p.status })), { from, to }, minIsoDate(to, yesterday));
@@ -178,15 +194,17 @@ exportsRoute.get('/financial-reports/:id', async (c) => {
   };
   const { data: lines, error } = await db.rpc('financial_report_statement', { p_report_id: id });
   if (error) throw fromPostgrest(error);
+  // Screen, PDF and CSV share one statement: lines, subtotals and (with budgets.view) budget and variances.
+  const { data: canBudget } = await db.rpc('check_permission', { p_perm: 'budgets.view', p_company_id: r.company_id, p_property_id: r.property_id });
+  const [{ data: accounts }, { data: budgetRows }] = await Promise.all([
+    db.from('financial_accounts').select('id, code, name, nature, section, sort_order').eq('company_id', r.company_id),
+    canBudget ? db.rpc('budget_monthly', { p_company_id: r.company_id, p_from: r.period_month, p_to: r.period_month }) : Promise.resolve({ data: [] }),
+  ]);
+  const actual = new Map<string, number>();
+  for (const l of (lines ?? []) as Array<{ account_id: string; amount: number }>) actual.set(l.account_id, Number(l.amount));
+  const budget = new Map<string, number>();
+  for (const b of (budgetRows ?? []) as Array<{ property_id: string; account_id: string; amount: number }>) if (b.property_id === r.property_id) budget.set(b.account_id, Number(b.amount));
   if (asPdf) {
-    const [{ data: accounts }, { data: budgetRows }] = await Promise.all([
-      db.from('financial_accounts').select('id, code, name, nature, section, sort_order').eq('company_id', r.company_id),
-      db.rpc('budget_monthly', { p_company_id: r.company_id, p_from: r.period_month, p_to: r.period_month }),
-    ]);
-    const actual = new Map<string, number>();
-    for (const l of (lines ?? []) as Array<{ account_id: string; amount: number }>) actual.set(l.account_id, Number(l.amount));
-    const budget = new Map<string, number>();
-    for (const b of (budgetRows ?? []) as Array<{ property_id: string; account_id: string; amount: number }>) if (b.property_id === r.property_id) budget.set(b.account_id, Number(b.amount));
     const bytes = await renderStatementPdf({
       brand: await pdfBranding(db, r.company_id),
       propertyName: r.properties.name,
@@ -210,15 +228,15 @@ exportsRoute.get('/financial-reports/:id', async (c) => {
     return pdfResponse(bytes, `${r.properties.code}_${r.period_month.slice(0, 7)}_rev${r.revision}.pdf`);
   }
   const brand = await brandingFor(db, r.company_id);
-  const statement = ((lines ?? []) as Array<{ code: string; name: string; section: string; nature: string; sort_order: number; amount: number }>).sort((a, b) => a.sort_order - b.sort_order);
+  const { rows: stRows, statistics } = buildStatement((accounts ?? []) as never, actual, budget, new Map());
   const out: Array<Array<string | number | null>> = [
     [brand.portal_name],
     [`${r.properties.name} (${r.properties.code}) — ${r.title}`],
     [`Status: ${r.status.toUpperCase()}${r.status !== 'published' ? ' — NOT FOR DISTRIBUTION' : ''}; revision ${r.revision}${r.published_at ? `; published ${r.published_at.slice(0, 10)}` : ''}`],
     [],
-    ['section', 'account_code', 'account_name', 'amount'],
-    ...statement.map((l) => [l.section, l.code, l.name, l.nature === 'statistic' ? formatNumber(Number(l.amount)) : Number(l.amount).toFixed(2)]),
+    ...statementCsvRows(stRows, statistics, budget.size > 0),
   ];
+  if (budget.size > 0) out.push([], ['variance = actual - budget; variance_pct = variance / |budget| x 100. Blank = unavailable.']);
   if (brand.report_footer) out.push([], [brand.report_footer]);
   const svc = await serviceClient();
   await svc.rpc('svc_audit', {

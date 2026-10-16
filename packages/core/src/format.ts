@@ -69,3 +69,43 @@ export function parseAmount(raw: string): number | null {
   if (!Number.isFinite(n) || n >= MAX_AMOUNT) return null;
   return neg && n !== 0 ? -n : n;
 }
+
+const MONTH_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', timeZone: 'UTC' });
+const DAY_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const at = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`);
+
+/**
+ * An import's period in the grain of its report type (R3-25): months for monthly actuals and
+ * budgets ("May 2019", "Jan – Dec 2029"), days for daily performance.
+ */
+export function formatImportPeriod(reportType: string, start: string | null | undefined, end: string | null | undefined): string {
+  if (!start) return UNAVAILABLE;
+  const to = end ?? start;
+  if (reportType === 'monthly_actuals' || reportType === 'budget') {
+    const y1 = start.slice(0, 4);
+    const y2 = to.slice(0, 4);
+    const m1 = MONTH_FMT.format(at(start));
+    const m2 = MONTH_FMT.format(at(to));
+    if (start.slice(0, 7) === to.slice(0, 7)) return `${m1} ${y1}`;
+    return y1 === y2 ? `${m1} – ${m2} ${y1}` : `${m1} ${y1} – ${m2} ${y2}`;
+  }
+  return start === to ? DAY_FMT.format(at(start)) : `${DAY_FMT.format(at(start))} – ${DAY_FMT.format(at(to))}`;
+}
+
+const COMMENTARY_SECTION_LABELS: Record<string, string> = {
+  executive_summary: 'Month in review',
+  financial: 'Profitability',
+  variance: 'Variance',
+  performance: 'Performance',
+  sales_marketing: 'Sales & marketing',
+  operations: 'Operations',
+  capex: 'CapEx',
+  other: 'Other',
+};
+
+/** Heading for an owner-facing commentary item (R3-23): the account for variance comments, otherwise its title or section. */
+export function commentaryHeading(c: { section: string; title?: string | null; account_name?: string | null }): string {
+  if (c.section === 'variance') return c.account_name ? `Variance — ${c.account_name}` : (c.title ?? 'Variance');
+  if (c.title) return c.title;
+  return COMMENTARY_SECTION_LABELS[c.section] ?? c.section.replace(/_/g, ' ').replace(/^./, (x) => x.toUpperCase());
+}

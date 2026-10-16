@@ -54,7 +54,8 @@ describe('room inventory changes', () => {
     const owner = await signIn(USER.olivia);
     expect((await owner.db.rpc('set_room_inventory', { p_property_id: PROPERTY.sea, p_effective_from: '2026-11-01', p_room_count: 230, p_reason: 'x' })).error?.code).toBe('42501');
     const admin = await signIn(USER.hvAdmin);
-    expect((await admin.db.rpc('set_room_inventory', { p_property_id: PROPERTY.sea, p_effective_from: '2010-01-01', p_room_count: 230, p_reason: 'Backdated' })).error?.code).toBe('22023');
+    // A change cannot start inside the current period (backdating before the first period is allowed since R3-04; see qa-round3.test.ts).
+    expect((await admin.db.rpc('set_room_inventory', { p_property_id: PROPERTY.sea, p_effective_from: '2015-06-01', p_room_count: 230, p_reason: 'Backdated' })).error?.code).toBe('22023');
     expect((await admin.db.rpc('set_room_inventory', { p_property_id: PROPERTY.sea, p_effective_from: '2024-12-01', p_room_count: 220, p_reason: 'Same' })).error?.message).toMatch(/unchanged/);
     expect((await admin.db.rpc('set_room_inventory', { p_property_id: PROPERTY.sea, p_effective_from: '2024-12-01', p_room_count: 224, p_reason: 'Four rooms converted from offices' })).error).toBeNull();
     const { data } = await admin.db.from('room_inventory_history').select('room_count, effective_from, effective_to').eq('property_id', PROPERTY.sea).order('effective_from');

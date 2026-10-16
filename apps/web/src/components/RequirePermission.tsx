@@ -4,7 +4,7 @@ import type { Permission } from '@hop/core';
 import { usePortal, useCompany } from '../state/portal';
 import { Card, Empty, Notice } from './ui';
 
-export type SectionState = 'open' | 'locked' | 'hidden';
+export type SectionState = 'open' | 'locked' | 'hidden' | 'disabled';
 
 /**
  * Whether a section is usable from the effective (per-property) permissions.
@@ -16,7 +16,8 @@ export function useSectionState() {
   const { canAny, mfaLocked } = usePortal();
   const c = useCompany();
   return (perms: Permission[] | undefined, module?: string): SectionState => {
-    if (module && c.modules[module] === false) return 'hidden';
+    // A module switched off for the company is not a missing permission (R3-35).
+    if (module && c.modules[module] === false) return 'disabled';
     if (!perms) return 'open';
     if (perms.some((p) => canAny(p) || (c.all_properties && c.company_permissions.includes(p)))) return 'open';
     if (perms.some((p) => mfaLocked(p))) return 'locked';
@@ -28,11 +29,21 @@ export function useSectionState() {
 export function RequirePermission({ perms, module, section, children }: { perms: Permission[]; module?: string; section: string; children?: ReactNode }) {
   const state = useSectionState()(perms, module);
   const location = useLocation();
+  const c = useCompany();
   if (state === 'open') return <>{children ?? <Outlet />}</>;
+  if (state === 'disabled') {
+    return (
+      <Card>
+        <Empty page title={`${section} isn’t enabled for ${c.company_name}`}>
+          Your platform administrator can turn it on. <Link to="/">Go to the home page</Link>
+        </Empty>
+      </Card>
+    );
+  }
   if (state === 'locked') {
     return (
       <Card>
-        <Empty title={`Verify with two-factor authentication to open ${section}`}>
+        <Empty page title={`Verify with two-factor authentication to open ${section}`}>
           <span className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
             <Link className="btn btn-primary" to={verifyLink(location.pathname + location.search)}>Verify with 2FA</Link>
           </span>
@@ -42,7 +53,7 @@ export function RequirePermission({ perms, module, section, children }: { perms:
   }
   return (
     <Card>
-      <Empty title="You don’t have access to this section">
+      <Empty page title="You don’t have access to this section">
         {section} isn’t part of the access you’ve been given. <Link to="/">Go to the home page</Link>
       </Empty>
     </Card>

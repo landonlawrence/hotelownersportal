@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { computeKpis, formatCurrency, formatPercent, REMAINING_FUNDS_DEFINITION } from '@hop/core';
+import { commentaryHeading, computeKpis, formatCurrency, formatPercent, REMAINING_FUNDS_DEFINITION } from '@hop/core';
 import { supabase, unwrap } from '../lib/supabase';
 import { downloadDocumentVersion, downloadFromApi } from '../lib/api';
 import { useRpc } from '../lib/hooks';
@@ -85,7 +85,9 @@ interface Snapshot {
   performance_prior_year?: Perf;
   financial_report?: { id: string; title: string; revision: number; published_at: string } | null;
   budget_variance?: Array<{ account_id: string; code: string; name: string; nature: Account['nature']; section: string; sort_order: number; actual: number | null; budget: number | null }>;
-  commentary?: Array<{ section: string; title: string | null; body: string }>;
+  commentary?: Array<{ section: string; title: string | null; body: string; account_name?: string | null }>;
+  /** Set when the viewer may see the statement but not budgets (budget figures removed). */
+  budget_hidden?: boolean;
   capex?: Array<{ project_id: string; number: string; title: string; status: string; approved_budget: number; actual_spend: number; open_commitments: number; remaining: number; percent_complete: number; latest_update: string | null }>;
   documents?: Array<{ document_id: string; title: string }>;
   definitions?: Record<string, string>;
@@ -110,13 +112,24 @@ export function ReportPackagePage() {
     queryFn: async () =>
       unwrap(await supabase.from('reporting_packages').select('id, revision').eq('property_id', q.data!.package.property_id).eq('period_month', q.data!.package.period_month).eq('status', 'published').maybeSingle()) as { id: string; revision: number } | null,
   });
+  // The statement frozen in the package may since have been corrected (R3-27).
+  const snapReport = q.data?.snapshot?.financial_report;
+  const currentStatement = useQuery({
+    queryKey: ['package-statement-current', q.data?.package.property_id, q.data?.package.period_month],
+    enabled: !!snapReport,
+    queryFn: async () =>
+      unwrap(await supabase.from('financial_reports').select('id, revision').eq('property_id', q.data!.package.property_id).eq('period_month', q.data!.package.period_month).eq('report_type', 'monthly_pnl').eq('status', 'published').maybeSingle()) as { id: string; revision: number } | null,
+  });
   if (q.isLoading) return <Loading />;
-  if (q.error) return <ErrorState error={q.error} />;
-  if (!q.data) return <Empty title="Report not found">It may not exist, may not be published yet, or you may not have access.</Empty>;
+  if (q.error) return <ErrorState error={q.error} retry={() => void q.refetch()} />;
+  if (!q.data) return <Empty page title="Report not found">It may not exist, may not be published yet, or you may not have access.</Empty>;
   const { package: pkg, snapshot: s } = q.data;
   const cur = perfKpis(s?.performance);
   const py = perfKpis(s?.performance_prior_year);
   const partial = s?.performance ? s.performance.reported_days < s.performance.expected_days : false;
+  // Like the dashboard: no prior-year changes for an incomplete period (R3-14).
+  const comparisonNote = partial ? 'Comparisons hidden — incomplete period' : undefined;
+  const corrected = s?.financial_report && currentStatement.data && currentStatement.data.revision > s.financial_report.revision ? currentStatement.data : null;
   const statement = s?.budget_variance ? buildStatement(s.budget_variance.map((b) => ({ id: b.account_id, code: b.code, name: b.name, nature: b.nature, section: b.section, sort_order: b.sort_order })), new Map(s.budget_variance.filter((b) => b.actual !== null).map((b) => [b.account_id, Number(b.actual)])), new Map(s.budget_variance.filter((b) => b.budget !== null).map((b) => [b.account_id, Number(b.budget)])), new Map()) : null;
   return (
     <div className="stack">
@@ -143,21 +156,30 @@ export function ReportPackagePage() {
       {s?.performance && (
         <Card title="Performance summary" actions={<span className="small muted">Provisional daily figures · {s.performance.reported_days}/{s.performance.expected_days} days reported</span>}>
           <div className="grid grid-kpi">
-            <KpiCard label="Occupancy" value={cur.occupancyPct} kind="pct" priorYear={py.occupancyPct} partial={partial} />
-            <KpiCard label="ADR" value={cur.adr} kind="money_cents" priorYear={py.adr} partial={partial} />
-            <KpiCard label="RevPAR" value={cur.revpar} kind="money_cents" priorYear={py.revpar} partial={partial} />
-            <KpiCard label="Total revenue" value={cur.totalRevenue} kind="money" priorYear={py.totalRevenue} partial={partial} />
+            <KpiCard label="Occupancy" value={cur.occupancyPct} kind="pct" priorYear={py.occupancyPct} partial={partial} comparisonNote={comparisonNote} />
+            <KpiCard label="ADR" value={cur.adr} kind="money_cents" priorYear={py.adr} partial={partial} comparisonNote={comparisonNote} />
+            <KpiCard label="RevPAR" value={cur.revpar} kind="money_cents" priorYear={py.revpar} partial={partial} comparisonNote={comparisonNote} />
+            <KpiCard label="Total revenue" value={cur.totalRevenue} kind="money" priorYear={py.totalRevenue} partial={partial} comparisonNote={comparisonNote} />
           </div>
         </Card>
       )}
       {s?.commentary && s.commentary.length > 0 && (
         <Card title="Management commentary">
-          <div className="prose">{s.commentary.map((c, i) => <div key={i}><h3>{c.title ?? c.section.replace('_', ' ')}</h3><p>{c.body}</p></div>)}</div>
+          <div className="prose">{s.commentary.map((c, i) => <div key={i}><h3>{commentaryHeading(c)}</h3><p>{c.body}</p></div>)}</div>
         </Card>
       )}
-      {statement && (
-        <Card title="Budget variances" flush actions={s?.financial_report ? <Link className="small" to={`/financials/reports/${s.financial_report.id}`} style={{ paddingRight: 16 }}>Financial statement (rev {s.financial_report.revision})</Link> : <span className="small muted" style={{ paddingRight: 16 }}>No published statement for this period</span>}>
-          <StatementTable rows={statement.rows} statistics={statement.statistics} currency="USD" showPrior={false} />
+      {(statement || s?.financial_report) && (
+        <Card
+          title={s?.budget_hidden ? 'Financial statement' : 'Financial statement and budget variances'}
+          flush
+          actions={s?.financial_report ? <Link className="small" to={`/financials/reports/${s.financial_report.id}`} style={{ paddingRight: 16 }}>Financial statement (rev {s.financial_report.revision})</Link> : <span className="small muted" style={{ paddingRight: 16 }}>No published statement for this period</span>}
+        >
+          {corrected && (
+            <div style={{ padding: '0 16px' }}>
+              <Notice tone="info">This statement has since been corrected — <Link to={`/financials/reports/${corrected.id}`}>view revision {corrected.revision}</Link>. This report keeps the figures it was published with.</Notice>
+            </div>
+          )}
+          {statement && <StatementTable rows={statement.rows} statistics={statement.statistics} currency="USD" showPrior={false} showBudget={!s?.budget_hidden} />}
         </Card>
       )}
       {s?.capex && s.capex.length > 0 && (

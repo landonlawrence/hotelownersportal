@@ -121,13 +121,13 @@ function PlatformShell({ email, aal, awaiting }: { email: string; aal: string; a
           You have an open support session for {awaiting.map((a) => a.company_name).join(', ')}. Support access only works in a 2FA-verified session — verify to continue.
         </Notice>
       )}
-      <Suspense fallback={<Loading />}>{onSecurity ? <SecurityPage /> : <Platform />}</Suspense>
+      <Suspense fallback={<Loading />}>{onSecurity ? <SecurityPage embedded /> : <Platform />}</Suspense>
     </>
   );
 }
 
 function NotFound() {
-  return <Empty title="Page not found"><Link to="/">Go to the home page</Link></Empty>;
+  return <Empty page title="Page not found"><Link to="/">Go to the home page</Link></Empty>;
 }
 
 const router = createBrowserRouter([
@@ -151,7 +151,7 @@ const router = createBrowserRouter([
                 children: [{ path: 'performance', element: <PerformancePage /> }],
               },
               {
-                element: <RequirePermission perms={['financials.view', 'financials.view_draft', 'financials.edit', 'budgets.view', 'budgets.edit', 'budgets.approve']} module="financials" section="Budgets & Financials" />,
+                element: <RequirePermission perms={['financials.view', 'financials.view_draft', 'financials.edit', 'budgets.view', 'budgets.edit', 'budgets.approve']} module="financials" section="Budgets & financials" />,
                 children: [
                   { path: 'financials', element: <FinancialsPage /> },
                   { path: 'financials/reports/:id', element: <FinancialReportPage /> },
