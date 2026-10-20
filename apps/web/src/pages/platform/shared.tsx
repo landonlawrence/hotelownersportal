@@ -53,11 +53,11 @@ export interface CompanyDetail {
   branding: Branding | null;
   modules: Record<string, boolean>;
   domains: Array<{ id: string; hostname: string; is_primary: boolean; verification_status: 'pending' | 'verified' | 'failed'; verification_token: string; created_at: string }>;
-  admin_invitations: Array<{ id: string; email: string; created_at: string; expires_at: string; accepted_at: string | null; revoked_at: string | null }>;
+  admin_invitations: Array<{ id: string; email: string | null; created_at: string; expires_at: string; accepted_at: string | null; revoked_at: string | null }>;
   members_by_role: Record<string, number>;
   properties: Array<{ id: string; code: string; name: string; city: string | null; region: string | null; status: string; timezone: string; rooms: number | null }>;
   support_sessions: Array<{ id: string; starts_at: string; expires_at: string; ended_at: string | null; ticket_ref: string }>;
-  activity: Array<{ action: string; created_at: string; actor_kind: string }>;
+  activity: Array<{ action: string; entity_type: string; created_at: string }>;
   setup: SetupState;
 }
 

@@ -23,6 +23,21 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'activity', label: 'Activity' },
 ];
 
+const ROW_ENTITY: Record<string, string> = {
+  company_branding: 'Branding',
+  company_modules: 'Features',
+  company_domains: 'Domains',
+  companies: 'Company profile',
+};
+function activityLabel(a: { action: string; entity_type: string }): string {
+  if (ACTIVITY_LABEL[a.action]) return ACTIVITY_LABEL[a.action]!;
+  if (['insert', 'update', 'delete'].includes(a.action)) {
+    const what = ROW_ENTITY[a.entity_type] ?? a.entity_type.replace(/_/g, ' ');
+    return `${what} ${a.action === 'insert' ? 'added' : a.action === 'delete' ? 'removed' : 'changed'}`;
+  }
+  return a.action.replace(/^platform\./, '').replace(/_/g, ' ');
+}
+
 const ACTIVITY_LABEL: Record<string, string> = {
   'platform.company_provisioned': 'Company created',
   'platform.admin_invited': 'Administrator invitation issued',
@@ -191,13 +206,23 @@ function AdminsTab({ d }: { d: CompanyDetail }) {
         </Card>
       )}
       <Card title="Invite an administrator">
-        <form className="row" onSubmit={(e) => { e.preventDefault(); if (emailValid(email)) void issue(email.trim().toLowerCase()); }}>
-          <input type="email" aria-label="Administrator email" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} style={{ flex: '1 1 260px' }} />
-          <button className="btn btn-primary" disabled={busy || !emailValid(email) || !verified}>{busy ? 'Issuing…' : 'Issue invitation'}</button>
-        </form>
-        {!verified && <p className="small muted" style={{ marginBottom: 0 }}>Needs a 2FA-verified session.</p>}
+        {d.setup.admin_joined ? (
+          <p style={{ margin: 0 }}>
+            This company has an administrator, so further people are invited from inside the company. If they need help, open a support session from the Support access tab.
+          </p>
+        ) : (
+          <>
+            <form className="row" onSubmit={(e) => { e.preventDefault(); if (emailValid(email)) void issue(email.trim().toLowerCase()); }}>
+              <input type="email" aria-label="Administrator email" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} style={{ flex: '1 1 260px' }} />
+              <button className="btn btn-primary" disabled={busy || !emailValid(email) || !verified}>{busy ? 'Issuing…' : 'Issue invitation'}</button>
+            </form>
+            <p className="small muted" style={{ marginBottom: 0 }}>
+              {verified ? 'Available until the first administrator joins.' : 'Needs a 2FA-verified session.'}
+            </p>
+          </>
+        )}
       </Card>
-      <Card title="Administrator invitations" flush>
+      <Card title="Invitations issued from this console" flush>
         {d.admin_invitations.length === 0 ? (
           <Empty title="No administrator invitations">Issue one above.</Empty>
         ) : (
@@ -209,11 +234,11 @@ function AdminsTab({ d }: { d: CompanyDetail }) {
                   const open = !i.accepted_at && !i.revoked_at;
                   return (
                     <tr key={i.id}>
-                      <td><strong>{i.email}</strong></td>
+                      <td>{i.email ? <strong>{i.email}</strong> : <span className="muted">Accepted (email private to the company)</span>}</td>
                       <td>{fmtDate(i.created_at)}</td>
                       <td>{state(i)}</td>
                       <td><div className="cell-actions">
-                        {!i.accepted_at && <button className="btn btn-sm" disabled={busy || !verified} onClick={() => void issue(i.email)} aria-label={`Send a new link to ${i.email}`}>New link</button>}
+                        {!i.accepted_at && i.email && !d.setup.admin_joined && <button className="btn btn-sm" disabled={busy || !verified} onClick={() => void issue(i.email!)} aria-label={`Send a new link to ${i.email}`}>New link</button>}
                         {open && new Date(i.expires_at) > new Date() && <button className="btn btn-sm btn-danger" disabled={!verified} onClick={() => void revoke(i.id)} aria-label={`Revoke invitation for ${i.email}`}>Revoke</button>}
                       </div></td>
                     </tr>
@@ -294,7 +319,7 @@ function ProfileTab({ d }: { d: CompanyDetail }) {
   const { ctx } = usePortal();
   const refresh = useRefresh(d.company.id);
   const verified = ctx?.aal === 'aal2';
-  const [f, setF] = useState({ name: d.company.name, legal_name: d.company.legal_name ?? '', default_currency: d.company.default_currency, require_mfa_for_privileged: d.company.require_mfa });
+  const [f, setF] = useState({ name: d.company.name, legal_name: d.company.legal_name ?? '' });
   const [msg, setMsg] = useState<Msg>(null);
   const [statusModal, setStatusModal] = useState(false);
   const [reason, setReason] = useState('');
@@ -312,7 +337,7 @@ function ProfileTab({ d }: { d: CompanyDetail }) {
     if (error) return setMsg({ tone: 'bad', text: dbErrorMessage(error)! });
     setStatusModal(false);
     setReason('');
-    setMsg({ tone: 'good', text: suspended ? 'Company reactivated. Members have their access back.' : 'Company suspended. Members can no longer see its data.' });
+    setMsg({ tone: 'good', text: suspended ? 'Company reactivated. Members have their access back.' : 'Company suspended. Members can no longer open its hotels, financials, documents or reports.' });
     await refresh();
   };
   return (
@@ -322,18 +347,18 @@ function ProfileTab({ d }: { d: CompanyDetail }) {
         <form className="stack" style={{ gap: 12 }} onSubmit={(e) => { e.preventDefault(); void save(); }}>
           <Field label="Company name"><input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <Field label="Legal name"><input value={f.legal_name} onChange={(e) => setF({ ...f, legal_name: e.target.value })} /></Field>
-          <Field label="Reporting currency"><input maxLength={3} value={f.default_currency} onChange={(e) => setF({ ...f, default_currency: e.target.value.toUpperCase() })} /></Field>
-          <label className="module-option">
-            <input type="checkbox" checked={f.require_mfa_for_privileged} onChange={(e) => setF({ ...f, require_mfa_for_privileged: e.target.checked })} />
-            <span><strong>Require 2FA for privileged work</strong><span className="muted small">Administration, publishing and approvals.</span></span>
-          </label>
+          <dl className="kv">
+            <dt>Reporting currency</dt><dd>{d.company.default_currency}</dd>
+            <dt>2FA for privileged work</dt><dd>{d.company.require_mfa ? 'Required' : 'Not required'}</dd>
+          </dl>
+          <p className="small muted" style={{ margin: 0 }}>The company’s own administrators manage its currency and 2FA policy.</p>
           <button className="btn btn-primary" style={{ width: 'fit-content' }} disabled={!verified || f.name.trim().length < 2}>Save profile</button>
         </form>
       </Card>
       <Card title="Status">
         <p style={{ marginTop: 0 }}>
           {suspended
-            ? 'Suspended. Nobody at this company can see its data. Nothing has been deleted.'
+            ? 'Suspended. Members can’t open its hotels, financials, documents or reports. Nothing has been deleted.'
             : 'Active. Members sign in and work normally.'}
         </p>
         <button className={`btn ${suspended ? 'btn-primary' : 'btn-danger'}`} disabled={!verified || d.company.is_demo} onClick={() => setStatusModal(true)}>
@@ -343,7 +368,7 @@ function ProfileTab({ d }: { d: CompanyDetail }) {
       </Card>
       {statusModal && (
         <Modal title={suspended ? `Reactivate ${d.company.name}` : `Suspend ${d.company.name}`} onClose={() => setStatusModal(false)}>
-          <p>{suspended ? 'Members get their access back immediately.' : 'Every member loses access immediately, including admins. Data is kept and access returns when you reactivate.'}</p>
+          <p>{suspended ? 'Members get their access back immediately.' : 'Every member, including admins, immediately loses access to its hotels, financials, documents and reports. Data is kept and access returns when you reactivate.'}</p>
           <Field label="Reason (recorded in the audit log)"><input autoFocus value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
           <div className="row">
             <button className={`btn ${suspended ? 'btn-primary' : 'btn-danger'}`} disabled={!reason.trim()} onClick={() => void setStatus()}>{suspended ? 'Reactivate' : 'Suspend'}</button>
@@ -488,7 +513,7 @@ function ActivityTab({ d }: { d: CompanyDetail }) {
         <ul className="activity-list">
           {d.activity.map((a, i) => (
             <li key={i}>
-              <span>{ACTIVITY_LABEL[a.action] ?? a.action.replace(/^platform\./, '').replace(/_/g, ' ')}</span>
+              <span>{activityLabel(a)}</span>
               <time className="muted small" dateTime={a.created_at}>{new Date(a.created_at).toLocaleString()}</time>
             </li>
           ))}

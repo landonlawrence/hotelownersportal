@@ -56,6 +56,15 @@ financial data. Support access requires opening a `support_access_sessions` row 
 expiry ≤ 8h), which is audited and notifies company admins. Sessions grant read-only permissions
 (no publishing, approving, or confidential documents).
 
+**Operator console (2026-10-20).** To onboard and look after companies, platform administrators see
+operational metadata through `platform_*` RPCs without a support session: company profile, branding,
+features and domains; setup progress; counts of members by role; hotel names, codes, locations, status
+and room counts; and the company-administrator invitations a platform admin issued (the email is hidden
+once accepted). They never see member identities, money, documents or reports this way. Platform admins
+can issue admin invitations only while a company has no active administrator (setup or recovery), never
+to a platform-admin account and never to someone who already has a membership there; afterwards the
+company's own admins invite people. Every platform write needs an `aal2` session and is audited.
+
 ## ADR-009 MFA for privileged users
 Privileged permissions (admin, publish, approve, edit financials, manage documents, ingestion)
 require an `aal2` session (Supabase TOTP MFA). Policies call `app.has_permission`, which demotes a

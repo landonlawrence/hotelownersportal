@@ -51,6 +51,7 @@ Per-membership allow/deny overrides and per-property permission lists refine the
 | Property-scoped editors changing shared configuration | company-wide permission for company-wide rows; property checks in `USING` and `WITH CHECK` | `qa-round3.test.ts` (R3-01, R3-19) |
 | Forged authors and timestamps | `BEFORE` triggers set author/approver/time columns | `qa-round3.test.ts` (R3-08) |
 | Platform staff reading tenant data | money-free audit metadata, profiles only in support sessions | `qa-round3.test.ts` (R3-02) |
+| Operator console | operational metadata only (ADR-008); writes need aal2; no admin invitations once a company has an admin or to platform-admin accounts; anon cannot execute `platform_*` | `platform-console.test.ts` |
 | Support staff over-reach | no standing access; time-boxed, MFA-gated, read-only, audited sessions endable by company admins | `foundation.test.ts` |
 | Client privilege defaults | default privileges revoked; test asserts `anon` has no table grants and every table has RLS | `foundation.test.ts` |
 | Secrets exposure | browser has publishable key only; lint rule; Lambda env has secret ARN only | CDK assertion tests, ESLint |
