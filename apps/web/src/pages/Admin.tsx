@@ -7,7 +7,7 @@ import { apiJson, fetchMeta } from '../lib/api';
 import { useDisplayNames, useRpc } from '../lib/hooks';
 import { usePortal, useCompany } from '../state/portal';
 import { AdminProperties } from './AdminProperties';
-import { Badge, Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, TabPanel, Tabs, confirmAction, dbErrorMessage, errorMessage, fmtDate, localToday } from '../components/ui';
+import { Card, Empty, ErrorState, Loading, Modal, Notice, PageHeader, StatusBadge, TabPanel, Tabs, confirmAction, dbErrorMessage, errorMessage, fmtDate, localToday } from '../components/ui';
 
 type Tab = 'users' | 'invitations' | 'properties' | 'branding' | 'audit' | 'support' | 'platform';
 
@@ -50,7 +50,12 @@ export function AdminPage() {
         {tab === 'branding' && <Branding />}
         {tab === 'audit' && <Audit />}
         {tab === 'support' && <Support />}
-        {tab === 'platform' && <Platform />}
+        {tab === 'platform' && (
+        <Card title="Operator console">
+          <p style={{ marginTop: 0 }}>Onboarding companies, admin invitations, branding, domains and support sessions now live in the operator console.</p>
+          <Link className="btn btn-primary" to="/platform">Open the operator console</Link>
+        </Card>
+      )}
       </TabPanel>
     </div>
   );
@@ -515,105 +520,5 @@ function Support() {
         </div>
       )}
     </Card>
-  );
-}
-
-export function Platform() {
-  const qc = useQueryClient();
-  const { ctx } = usePortal();
-  const companies = useQuery({ queryKey: ['platform-companies'], queryFn: async () => unwrap(await supabase.from('companies').select('id, slug, name, status, is_demo, created_at').order('name')) as Array<{ id: string; slug: string; name: string; status: string; is_demo: boolean; created_at: string }> });
-  const [support, setSupport] = useState({ company: '', reason: '', ticket: '', hours: 2 });
-  const [prov, setProv] = useState({ slug: '', name: '', portal: '', email: '' });
-  const [slugEdited, setSlugEdited] = useState(false);
-  const [msg, setMsg] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
-  const [invite, setInvite] = useState<{ company: string; email: string; link: string } | null>(null);
-  const [copied, setCopied] = useState(false);
-  const slugify = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 40);
-  const slugOk = /^[a-z0-9][a-z0-9-]{1,39}$/.test(prov.slug) && !prov.slug.endsWith('-');
-  const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(prov.email.trim());
-  const verified = ctx?.aal === 'aal2';
-  const [busy, setBusy] = useState(false);
-  const provision = async () => {
-    setMsg(null);
-    setBusy(true);
-    const { data, error } = await supabase.rpc('provision_company', { p_slug: prov.slug, p_name: prov.name.trim(), p_portal_name: prov.portal.trim() || prov.name.trim(), p_admin_email: prov.email.trim() });
-    setBusy(false);
-    if (error) return setMsg({ tone: 'bad', text: dbErrorMessage(error)! });
-    setInvite({ company: prov.name.trim(), email: prov.email.trim(), link: `${window.location.origin}/accept-invite#token=${(data as { token: string }).token}` });
-    setCopied(false);
-    setProv({ slug: '', name: '', portal: '', email: '' });
-    setSlugEdited(false);
-    await qc.invalidateQueries({ queryKey: ['platform-companies'] });
-  };
-  const openSupport = async () => {
-    setMsg(null);
-    const { error } = await supabase.rpc('open_support_session', { p_company_id: support.company, p_reason: support.reason, p_ticket_ref: support.ticket, p_hours: support.hours });
-    if (error) return setMsg({ tone: 'bad', text: dbErrorMessage(error)! });
-    setMsg({ tone: 'good', text: 'Support session opened (audited; company admins can see and end it).' });
-    await qc.invalidateQueries();
-  };
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(invite!.link);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  };
-  return (
-    <div className="stack">
-      {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
-      {invite && (
-        <Card className="invite-card" title={`${invite.company} is ready`}>
-          <div className="stack" style={{ gap: 10 }}>
-            <p style={{ margin: 0 }}>Send this invitation link to <strong>{invite.email}</strong>. It works once and expires in 14 days. They’ll create their password and become the company administrator.</p>
-            <div className="copy-row">
-              <input readOnly value={invite.link} aria-label="Invitation link" onFocus={(e) => e.currentTarget.select()} />
-              <button className="btn btn-primary" onClick={copy}>{copied ? 'Copied' : 'Copy link'}</button>
-            </div>
-            <p className="small muted" style={{ margin: 0 }}>This link is shown only now. If it’s lost, provision again with a different slug or ask an engineer to reissue it.</p>
-          </div>
-        </Card>
-      )}
-      <Card title="Provision a management company">
-        {!verified && <Notice tone="warn">Provisioning needs a 2FA-verified session. <Link to="/security">Verify with 2FA</Link>.</Notice>}
-        <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void provision(); }}>
-          <label className="field">Company name<input required placeholder="Greyridge Hospitality" value={prov.name} onChange={(e) => setProv({ ...prov, name: e.target.value, slug: slugEdited ? prov.slug : slugify(e.target.value) })} /></label>
-          <label className="field">
-            Short ID (slug)
-            <input required pattern="[a-z0-9\-]{2,40}" placeholder="greyridge" value={prov.slug} onChange={(e) => { setSlugEdited(true); setProv({ ...prov, slug: slugify(e.target.value) }); }} />
-            <span className={prov.slug && !slugOk ? 'field-error' : 'small muted'}>{prov.slug && !slugOk ? 'Use 2–40 lowercase letters, numbers or dashes; start and end with a letter or number.' : 'Lowercase letters, numbers and dashes. Other characters are converted to dashes.'}</span>
-          </label>
-          <label className="field">Portal name<input placeholder={prov.name ? `${prov.name} Owner Portal` : 'Shown on the sign-in page'} value={prov.portal} onChange={(e) => setProv({ ...prov, portal: e.target.value })} /></label>
-          <label className="field">First admin’s email<input required type="email" placeholder="admin@company.com" value={prov.email} onChange={(e) => setProv({ ...prov, email: e.target.value })} />{prov.email && !emailOk && <span className="field-error">Enter a valid email address.</span>}</label>
-          <div className="form-actions"><button className="btn btn-primary" disabled={busy || !slugOk || prov.name.trim().length < 2 || !emailOk || !verified}>{busy ? 'Provisioning…' : 'Provision company'}</button></div>
-        </form>
-      </Card>
-      <Card title="Open a support session">
-        <div className="stack" style={{ gap: 10 }}>
-          {ctx?.aal !== 'aal2' && <Notice tone="warn">Support sessions need a 2FA-verified session. <Link to="/security">Set up or verify 2FA</Link>.</Notice>}
-          <p className="muted small" style={{ margin: 0 }}>Read-only access to one company for up to 8 hours. The company’s admins can see and end it, and everything is audited.</p>
-          <div className="form-grid">
-            <label className="field">Company<select value={support.company} onChange={(e) => setSupport({ ...support, company: e.target.value })}><option value="">Select…</option>{companies.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-            <label className="field">Ticket reference<input value={support.ticket} onChange={(e) => setSupport({ ...support, ticket: e.target.value })} /></label>
-            <label className="field">Reason (10+ characters)<input value={support.reason} onChange={(e) => setSupport({ ...support, reason: e.target.value })} /></label>
-            <label className="field">Hours<input type="number" min={1} max={8} value={support.hours} onChange={(e) => setSupport({ ...support, hours: Number(e.target.value) })} /></label>
-            <div className="form-actions"><button className="btn" disabled={!support.company || support.reason.length < 10 || !support.ticket || ctx?.aal !== 'aal2'} onClick={openSupport}>Open session</button></div>
-          </div>
-        </div>
-      </Card>
-      <Card flush title={`Companies (${companies.data?.length ?? 0})`}>
-        {companies.data?.length ? (
-          <div className="table-wrap">
-            <table className="data">
-              <thead><tr><th>Name</th><th>Slug</th><th>Status</th><th>Created</th></tr></thead>
-              <tbody>{companies.data.map((c) => <tr key={c.id}><td><strong>{c.name}</strong>{c.is_demo && <> <Badge>Demo</Badge></>}</td><td className="muted">{c.slug}</td><td><StatusBadge status={c.status} /></td><td>{fmtDate(c.created_at)}</td></tr>)}</tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="No companies yet">Provision the first management company above.</Empty>
-        )}
-      </Card>
-    </div>
   );
 }

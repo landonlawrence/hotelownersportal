@@ -4,7 +4,7 @@ import { isAuthError, supabase } from './lib/supabase';
 import { usePortal } from './state/portal';
 import { Layout } from './components/Layout';
 import { RequireProperties } from './components/NoProperties';
-import { Card, Empty, Loading, Notice, PageHeader } from './components/ui';
+import { Card, Empty, Loading } from './components/ui';
 import { RequirePermission } from './components/RequirePermission';
 import { LoginPage, ResetPasswordPage } from './pages/Login';
 import { AcceptInvitePage } from './pages/AcceptInvite';
@@ -25,7 +25,7 @@ const NotificationsPage = lazy(() => import('./pages/Notifications').then((m) =>
 const ImportsPage = lazy(() => import('./pages/Imports').then((m) => ({ default: m.ImportsPage })));
 const ImportDetailPage = lazy(() => import('./pages/Imports').then((m) => ({ default: m.ImportDetailPage })));
 const AdminPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.AdminPage })));
-const Platform = lazy(() => import('./pages/Admin').then((m) => ({ default: m.Platform })));
+const PlatformConsole = lazy(() => import('./pages/platform/PlatformConsole').then((m) => ({ default: m.PlatformConsole })));
 const SecurityPage = lazy(() => import('./pages/Security').then((m) => ({ default: m.SecurityPage })));
 
 function RequireAuth() {
@@ -68,22 +68,22 @@ function RequireAuth() {
     );
   }
   if (ctxLoading || !ctx) return <Loading label="Loading your portfolio…" />;
-  if (!company) {
+  const onPlatform = location.pathname === '/platform' || location.pathname.startsWith('/platform/');
+  if (!company && ctx.is_platform_admin && !onPlatform) {
+    return <Navigate to={location.pathname.startsWith('/security') ? '/platform/security' : '/platform'} replace />;
+  }
+  if (!company && !ctx.is_platform_admin) {
     return (
       <div className="content">
-        {ctx.is_platform_admin ? (
-          <PlatformShell email={ctx.email} aal={ctx.aal} awaiting={ctx.support_sessions_awaiting_mfa ?? []} />
-        ) : (
-          <Card>
-            <Empty title="No active access">
-              Your account ({ctx.email}) is not currently linked to any management company, or your access has been revoked. Contact your management company if you believe this is a mistake.
-            </Empty>
-            <div className="row">
-              <button className="btn btn-primary" onClick={() => void refresh()}>Check again</button>
-              <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
-            </div>
-          </Card>
-        )}
+        <Card>
+          <Empty title="No active access">
+            Your account ({ctx.email}) is not currently linked to any management company, or your access has been revoked. Contact your management company if you believe this is a mistake.
+          </Empty>
+          <div className="row">
+            <button className="btn btn-primary" onClick={() => void refresh()}>Check again</button>
+            <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
+          </div>
+        </Card>
       </div>
     );
   }
@@ -91,38 +91,6 @@ function RequireAuth() {
     <Suspense fallback={<Loading />}>
       <Outlet />
     </Suspense>
-  );
-}
-
-/** Platform administrators without a company membership: provisioning, support sessions and their own 2FA. */
-function PlatformShell({ email, aal, awaiting }: { email: string; aal: string; awaiting: Array<{ company_name: string; support_expires_at: string }> }) {
-  const location = useLocation();
-  const onSecurity = location.pathname.startsWith('/security');
-  return (
-    <>
-      <PageHeader
-        title="Platform administration"
-        subtitle={`Signed in as ${email}. You see company data only through an audited support session.`}
-        actions={
-          <>
-            <Link className="btn" to={onSecurity ? '/' : '/security'}>{onSecurity ? 'Companies' : 'Account security'}</Link>
-            <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
-          </>
-        }
-      />
-      {aal !== 'aal2' && (
-        <Notice tone="warn">
-          Verify with two-factor authentication to make changes: provisioning companies, branding, domains, modules and support sessions all need a 2FA-verified session.{' '}
-          {!onSecurity && <Link to="/security">Verify with 2FA</Link>}
-        </Notice>
-      )}
-      {awaiting.length > 0 && (
-        <Notice tone="info">
-          You have an open support session for {awaiting.map((a) => a.company_name).join(', ')}. Support access only works in a 2FA-verified session — verify to continue.
-        </Notice>
-      )}
-      <Suspense fallback={<Loading />}>{onSecurity ? <SecurityPage embedded /> : <Platform />}</Suspense>
-    </>
   );
 }
 
@@ -137,6 +105,7 @@ const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [
+      { path: 'platform/*', element: <PlatformConsole /> },
       {
         element: <Layout />,
         children: [

@@ -147,6 +147,14 @@ export function Layout() {
               </div>
             );
           })}
+          {ctx?.is_platform_admin && (
+            <div className="nav-group">
+              <NavLink to="/platform" className="nav-console">
+                <Icon name="server" />
+                <span>Operator console</span>
+              </NavLink>
+            </div>
+          )}
         </nav>
         <div className="sidebar-footer">
           <strong>{c.company_name}</strong>
@@ -160,7 +168,7 @@ export function Layout() {
           <div className="support-banner row" style={{ justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
             <span>Read-only support session (audited) — expires {new Date(c.support_expires_at!).toLocaleString()}</span>
             <span className="row" style={{ gap: 6 }}>
-              <Link className="btn btn-sm" to="/admin?tab=platform">Back to platform console</Link>
+              <Link className="btn btn-sm" to="/platform">Back to operator console</Link>
               <button className="btn btn-sm" disabled={ending} onClick={() => void endSupport()}>{ending ? 'Ending…' : 'End support session'}</button>
             </span>
           </div>

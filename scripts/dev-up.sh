@@ -23,7 +23,12 @@ bash scripts/local-env.sh > /dev/null 2>&1 < /dev/null
 if [ "${RESET:-1}" = "1" ]; then
   npx supabase db reset --local > .local-logs/db-reset.log 2>&1 < /dev/null
   rm -rf .local-storage
-  npm run seed:files -w services/api > .local-logs/seed.log 2>&1 < /dev/null
+  # The REST API can lag the database restart after a reset; retry while its schema cache warms up.
+  for i in 1 2 3 4 5; do
+    npm run seed:files -w services/api > .local-logs/seed.log 2>&1 < /dev/null && break
+    [ "$i" = 5 ] && { echo "seeding demo files failed; see .local-logs/seed.log" >&2; exit 1; }
+    sleep 5
+  done
 fi
 # Stop servers started by a previous run (PID files, never pattern matching).
 for f in .local-logs/api.pid .local-logs/web.pid; do

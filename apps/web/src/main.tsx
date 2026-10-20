@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PortalProvider } from './state/portal';
 import { App } from './App';
+import '@fontsource-variable/hanken-grotesk';
 import './styles.css';
 
 const queryClient = new QueryClient({

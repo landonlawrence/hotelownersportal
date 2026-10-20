@@ -86,6 +86,16 @@ An independent review of the round-3 changes found one blocker (the import revie
 
 Deferred from round 3 (need decisions): whether confidential (loan/bank) documents need a 2FA-verified session in MFA-enforced companies; whether an investor without `financials.view` may download a P&L that was filed as a document; package narrative authoring UI; CapEx vendor management.
 
+## Operator console (2026-10-20)
+
+Platform administrators now work in their own console at `/platform` (migration `20261020001100_platform_console.sql`):
+- **Overview:** companies by stage (waiting for admin, setting up, live, suspended), a needs-attention list (expired or unaccepted admin invitations, stalled setup) and recent onboardings.
+- **Companies:** search and stage filters, with setup progress, hotel and people counts, and admin-invitation state.
+- **Onboarding wizard** (`platform_provision_company`): one atomic step creates the company with profile, currency, branding (with a live sign-in preview), features, the 2FA policy, hotels with room counts, the default chart of accounts and categories, and invitations for one or more admins.
+- **Company pages:** admin invitations (issue, replace or revoke), branding, profile and status (suspend or reactivate with a reason), features, domains (TXT verification token), support sessions and a platform activity trail.
+- **Data boundary:** platform admins see operational metadata only: counts, setup progress, the admin invitations they issued and hotel names. Member identities, money and documents still require an audited support session. Reads need a platform-admin session; every write needs 2FA and is audited as `platform.*`.
+- **Visual refresh:** a self-hosted Hanken Grotesk typeface, lining figures, a calmer slate palette, sentence-case labels and a radius hierarchy. The console has its own slate-and-brass identity, with company "key tags"; tenant portals keep their own branding.
+
 ## Defects found and fixed during verification
 
 - Default privileges granted new tables to `anon` → default privileges revoked globally; test asserts no `anon` grants and RLS on every table.
